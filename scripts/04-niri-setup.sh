@@ -3,11 +3,6 @@
 # ==============================================================================
 # 04-niri-setup.sh - Niri Desktop, Dotfiles & User Configuration
 # ==============================================================================
-# Logic Priority:
-# 1. Try installing awww-git via yay (Chaotic-AUR/Source)
-# 2. If failed, copy local binary from bin/awww
-# 3. If missing, fallback to swaybg and patch config
-# ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -20,7 +15,7 @@ log ">>> Starting Phase 4: Niri Environment & Dotfiles Setup"
 # ------------------------------------------------------------------------------
 # 0. Identify Target User
 # ------------------------------------------------------------------------------
-log "Step 0/10: Identify User"
+log "Step 0/9: Identify User"
 
 DETECTED_USER=$(awk -F: '$3 == 1000 {print $1}' /etc/passwd)
 
@@ -67,14 +62,32 @@ fi
 # ------------------------------------------------------------------------------
 # 1. Install Niri & Essentials
 # ------------------------------------------------------------------------------
-log "Step 1/10: Installing Niri and core components..."
+log "Step 1/9: Installing Niri and core components..."
 pacman -S --noconfirm --needed niri xwayland-satellite xdg-desktop-portal-gnome fuzzel kitty firefox libnotify mako polkit-gnome > /dev/null 2>&1
 success "Niri core packages installed."
 
 # ------------------------------------------------------------------------------
+# 1.5 Install Pre-compiled awww (Local Binary First)
+# ------------------------------------------------------------------------------
+log "Step 1.5/9: Checking for local awww binaries..."
+
+LOCAL_BIN_AWWW="$PARENT_DIR/bin/awww"
+LOCAL_BIN_DAEMON="$PARENT_DIR/bin/awww-daemon"
+
+if [ -f "$LOCAL_BIN_AWWW" ] && [ -f "$LOCAL_BIN_DAEMON" ]; then
+    log "-> Found local awww binaries. Installing to /usr/local/bin/..."
+    cp "$LOCAL_BIN_AWWW" /usr/local/bin/awww
+    cp "$LOCAL_BIN_DAEMON" /usr/local/bin/awww-daemon
+    chmod +x /usr/local/bin/awww /usr/local/bin/awww-daemon
+    success "awww & awww-daemon installed (Local Binary)."
+else
+    warn "Local awww binaries not found. Will rely on AUR/Fallback."
+fi
+
+# ------------------------------------------------------------------------------
 # 2. File Manager (Nautilus) Setup
 # ------------------------------------------------------------------------------
-log "Step 2/10: Configuring Nautilus and Terminal..."
+log "Step 2/9: Configuring Nautilus and Terminal..."
 
 pacman -S --noconfirm --needed ffmpegthumbnailer gvfs-smb nautilus-open-any-terminal file-roller gnome-keyring gst-plugins-base gst-plugins-good gst-libav nautilus > /dev/null 2>&1
 
@@ -94,47 +107,19 @@ if [ -f "$DESKTOP_FILE" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 3. Software Store
+# 3. Software Store (With USTC Mirror)
 # ------------------------------------------------------------------------------
-log "Step 3/10: Configuring Software Center..."
+log "Step 3/9: Configuring Software Center..."
 pacman -S --noconfirm --needed flatpak gnome-software > /dev/null 2>&1
+
+# 1. Add Flathub repo first (standard URL needed to initialize)
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak remote-modify flathub --url=https://mirror.sjtu.edu.cn/flathub > /dev/null 2>&1
-success "Flatpak configured."
 
-# ------------------------------------------------------------------------------
-# 3.5 [CHINA OPTIMIZATION] Enable Network Boosters
-# ------------------------------------------------------------------------------
-log "Step 3.5/10: Enabling China Network Optimizations..."
+# 2. Modify to USTC Mirror (User Requested)
+log "-> Setting Flathub mirror to USTC..."
+flatpak remote-modify flathub --url=https://mirrors.ustc.edu.cn/flathub
 
-# --- 1. GOPROXY ---
-log "-> Setting GOPROXY (https://goproxy.cn)..."
-export GOPROXY=https://goproxy.cn,direct
-# Persist for the session duration via /etc/environment
-if ! grep -q "GOPROXY" /etc/environment; then
-    echo "GOPROXY=https://goproxy.cn,direct" >> /etc/environment
-fi
-
-# --- 2. Chaotic-AUR ---
-log "-> Adding Chaotic-AUR (Pre-built Binaries)..."
-pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com >/dev/null 2>&1
-pacman-key --lsign-key 3056513887B78AEB >/dev/null 2>&1
-pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst' >/dev/null 2>&1
-
-if ! grep -q "\[chaotic-aur\]" /etc/pacman.conf; then
-    cat <<EOT >> /etc/pacman.conf
-
-[chaotic-aur]
-Include = /etc/pacman.d/chaotic-mirrorlist
-EOT
-fi
-pacman -Sy >/dev/null 2>&1
-
-# --- 3. Git URL Replacement ---
-log "-> Configuring Git URL replacement (gitclone.com)..."
-runuser -u "$TARGET_USER" -- git config --global url."https://gitclone.com/github.com/".insteadOf "https://github.com/"
-
-success "Network optimized for China."
+success "Flatpak configured (USTC Mirror)."
 
 # ------------------------------------------------------------------------------
 # [TRICK] NOPASSWD for yay
@@ -147,7 +132,7 @@ chmod 440 "$SUDO_TEMP_FILE"
 # ------------------------------------------------------------------------------
 # 4. Install Dependencies
 # ------------------------------------------------------------------------------
-log "Step 4/10: Installing dependencies from niri-applist.txt..."
+log "Step 4/9: Installing dependencies from niri-applist.txt..."
 
 LIST_FILE="$PARENT_DIR/niri-applist.txt"
 FAILED_PACKAGES=()
@@ -161,8 +146,8 @@ if [ -f "$LIST_FILE" ]; then
 
         for pkg in "${PACKAGE_ARRAY[@]}"; do
             if [ "$pkg" == "imagemagic" ]; then pkg="imagemagick"; fi
-            
-            # [修改点] 允许 awww-git 进入安装列表，尝试编译
+            # Skip manual installs logic
+            if [[ "$pkg" == "awww-git" || "$pkg" == "awww" ]]; then continue; fi
             
             if [[ "$pkg" == *"-git" ]]; then
                 GIT_LIST+=("$pkg")
@@ -174,15 +159,14 @@ if [ -f "$LIST_FILE" ]; then
         # --- Phase 1: Batch Install ---
         if [ -n "$BATCH_LIST" ]; then
             log "-> [Batch] Installing standard repository packages..."
-            # Pass GOPROXY explicitly to yay
-            if runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -S --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
+            if runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
                 success "Standard packages installed."
             else
                 warn "Batch install issues. Retrying one-by-one..."
                 for pkg in $BATCH_LIST; do
-                    if ! runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$pkg"; then
+                    if ! runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$pkg"; then
                         warn "Retry 2/2 for '$pkg'..."
-                        if ! runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$pkg"; then
+                        if ! runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$pkg"; then
                              error "Failed: $pkg"
                              FAILED_PACKAGES+=("$pkg")
                         fi
@@ -196,9 +180,9 @@ if [ -f "$LIST_FILE" ]; then
             log "-> [Slow] Installing '-git' packages..."
             for git_pkg in "${GIT_LIST[@]}"; do
                 log "-> Installing: $git_pkg ..."
-                if ! runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
+                if ! runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
                     warn "Retry 2/2 for '$git_pkg'..."
-                    if ! runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
+                    if ! runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
                         error "Failed: $git_pkg"
                         FAILED_PACKAGES+=("$git_pkg")
                     fi
@@ -208,7 +192,7 @@ if [ -f "$LIST_FILE" ]; then
             done
         fi
         
-        # --- Recovery Phase (Local Bin Fallback) ---
+        # --- Recovery Phase ---
         log "Running Recovery Checks..."
         
         # Waybar Recovery
@@ -218,20 +202,14 @@ if [ -f "$LIST_FILE" ]; then
             pacman -S --noconfirm --needed waybar > /dev/null 2>&1 && success "Waybar recovered."
         fi
 
-        # Awww Recovery (如果上面编译失败了，这里用本地文件救场)
+        # Awww Recovery (Local Binary Fallback)
         if ! command -v awww &> /dev/null; then
-            warn "Awww binary not found (AUR install failed)."
-            LOCAL_BIN_AWWW="$PARENT_DIR/bin/awww"
-            LOCAL_BIN_DAEMON="$PARENT_DIR/bin/awww-daemon"
-            
             if [ -f "$LOCAL_BIN_AWWW" ] && [ -f "$LOCAL_BIN_DAEMON" ]; then
-                log "-> Installing awww from LOCAL BINARIES (Fallback)..."
+                log "-> Installing awww from local binaries (Fallback)..."
                 cp "$LOCAL_BIN_AWWW" /usr/local/bin/awww
                 cp "$LOCAL_BIN_DAEMON" /usr/local/bin/awww-daemon
                 chmod +x /usr/local/bin/awww /usr/local/bin/awww-daemon
-                success "Awww recovered using local binaries. Backend remains 'awww'."
-            else
-                warn "Local binaries missing. Will try Swaybg later."
+                success "Awww recovered using local binaries."
             fi
         fi
 
@@ -257,7 +235,7 @@ fi
 # ------------------------------------------------------------------------------
 # 5. Clone Dotfiles
 # ------------------------------------------------------------------------------
-log "Step 5/10: Cloning and applying dotfiles..."
+log "Step 5/9: Cloning and applying dotfiles..."
 
 REPO_URL="https://github.com/SHORiN-KiWATA/ShorinArchExperience-ArchlinuxGuide.git"
 TEMP_DIR="/tmp/shorin-repo"
@@ -276,7 +254,6 @@ if [ -d "$TEMP_DIR/dotfiles" ]; then
     success "Dotfiles applied."
     
     # --- [ULTIMATE FALLBACK] Check Awww status ---
-    # 只有当编译失败 且 本地Bin也失败 时，才切 Swaybg
     if ! command -v awww &> /dev/null; then
         warn "Awww failed all install methods. Switching to swaybg..."
         pacman -S --noconfirm --needed swaybg > /dev/null 2>&1
@@ -293,7 +270,7 @@ fi
 # ------------------------------------------------------------------------------
 # 6. Wallpapers
 # ------------------------------------------------------------------------------
-log "Step 6/10: Setting up Wallpapers..."
+log "Step 6/9: Setting up Wallpapers..."
 WALL_DEST="$HOME_DIR/Pictures/Wallpapers"
 
 if [ -d "$TEMP_DIR/wallpapers" ]; then
@@ -306,45 +283,31 @@ rm -rf "$TEMP_DIR"
 # ------------------------------------------------------------------------------
 # 7. DDCUtil
 # ------------------------------------------------------------------------------
-log "Step 7/10: Configuring ddcutil..."
-runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -S --noconfirm --needed ddcutil-service > /dev/null 2>&1
+log "Step 7/9: Configuring ddcutil..."
+runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed ddcutil-service > /dev/null 2>&1
 gpasswd -a "$TARGET_USER" i2c
 
 # ------------------------------------------------------------------------------
 # 8. SwayOSD
 # ------------------------------------------------------------------------------
-log "Step 8/10: Installing SwayOSD..."
+log "Step 8/9: Installing SwayOSD..."
 pacman -S --noconfirm --needed swayosd > /dev/null 2>&1
 systemctl enable --now swayosd-libinput-backend.service > /dev/null 2>&1
 
 # ------------------------------------------------------------------------------
-# [CLEANUP] Remove temporary configs (Restoring State)
+# [CLEANUP] Remove temporary configs
 # ------------------------------------------------------------------------------
-log "Step 9/10: Restoring original configuration (Cleaning up)..."
+log "Step 9/9: Restoring configuration (Cleanup)..."
 
-# 1. Remove NOPASSWD
 log "-> Removing temporary NOPASSWD sudo access..."
 rm -f "$SUDO_TEMP_FILE"
 
-# 2. Remove Git URL Replacement
-log "-> Restoring Git URL configuration..."
-runuser -u "$TARGET_USER" -- git config --global --unset url."https://gitclone.com/github.com/".insteadOf
-
-# 3. Remove GOPROXY
-log "-> Removing GOPROXY from /etc/environment..."
-sed -i '/GOPROXY=https:\/\/goproxy.cn,direct/d' /etc/environment
-
-# 4. Remove Chaotic-AUR
-log "-> Removing Chaotic-AUR from pacman.conf..."
-# Delete the [chaotic-aur] block and the Include line following it
-sed -i '/\[chaotic-aur\]/,/Include = \/etc\/pacman.d\/chaotic-mirrorlist/d' /etc/pacman.conf
-
-success "Cleanup complete. System configuration restored."
+success "Cleanup complete."
 
 # ------------------------------------------------------------------------------
 # 10. Auto-Login & Niri Autostart
 # ------------------------------------------------------------------------------
-log "Step 10/10: Configuring Auto-login..."
+log "Step 10/9: Configuring Auto-login..."
 
 if [ "$SKIP_AUTOLOGIN" = true ]; then
     echo -e "${YELLOW}[INFO] Existing Display Manager detected. Skipping TTY auto-login setup.${NC}"
