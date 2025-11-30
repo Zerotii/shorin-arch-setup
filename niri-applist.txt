@@ -34,3 +34,5 @@ zoxide
 starship
 yazi
 fish
+jq
+imagemagic
