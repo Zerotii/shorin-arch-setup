@@ -1,6 +1,9 @@
 #!/bin/bash
 
-# Get script directory
+# ==============================================================================
+# 04-niri-setup.sh - Niri Desktop, Dotfiles & User Configuration
+# ==============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/00-utils.sh"
@@ -10,7 +13,7 @@ check_root
 log ">>> Starting Phase 4: Niri Environment & Dotfiles Setup"
 
 # ------------------------------------------------------------------------------
-# 0. Identify Target User (Automated)
+# 0. Identify Target User
 # ------------------------------------------------------------------------------
 log "Step 0/9: Identify User"
 
@@ -44,9 +47,9 @@ SKIP_AUTOLOGIN=false
 
 for dm in "${DMS[@]}"; do
     if systemctl is-enabled "$dm.service" &>/dev/null; then
-        log "-> Detected active Display Manager: $dm"
-        log "-> Niri will be available in the $dm session list."
-        log "-> TTY auto-login configuration will be SKIPPED to avoid conflicts."
+        echo -e "${YELLOW}[INFO] Detected active Display Manager: $dm${NC}"
+        echo -e "${YELLOW}[INFO] Niri will be added to the session list in $dm.${NC}"
+        echo -e "${YELLOW}[INFO] TTY auto-login configuration will be SKIPPED to avoid conflicts.${NC}"
         SKIP_AUTOLOGIN=true
         break
     fi
@@ -72,8 +75,7 @@ pacman -S --noconfirm --needed ffmpegthumbnailer gvfs-smb nautilus-open-any-term
 
 # Symlink Kitty to Gnome-Terminal (Safe Mode)
 if [ -f /usr/bin/gnome-terminal ] && [ ! -L /usr/bin/gnome-terminal ]; then
-    warn "/usr/bin/gnome-terminal is a real file (Standard Gnome Terminal installed)."
-    warn "Skipping symlink creation to prevent breaking existing installation."
+    warn "/usr/bin/gnome-terminal is a real file. Skipping symlink."
 else
     log "-> Symlinking kitty to gnome-terminal..."
     ln -sf /usr/bin/kitty /usr/bin/gnome-terminal
@@ -96,21 +98,27 @@ flatpak remote-modify flathub --url=https://mirror.sjtu.edu.cn/flathub > /dev/nu
 success "Flatpak configured."
 
 # ------------------------------------------------------------------------------
-# 4. Install Dependencies from List (Robust Mode)
+# [TRICK] NOPASSWD for yay
+# ------------------------------------------------------------------------------
+log "Configuring temporary NOPASSWD sudo access for '$TARGET_USER'..."
+SUDO_TEMP_FILE="/etc/sudoers.d/99_shorin_installer_temp"
+echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDO_TEMP_FILE"
+chmod 440 "$SUDO_TEMP_FILE"
+
+# ------------------------------------------------------------------------------
+# 4. Install Dependencies from List
 # ------------------------------------------------------------------------------
 log "Step 4/9: Installing dependencies from niri-applist.txt..."
 
 LIST_FILE="$PARENT_DIR/niri-applist.txt"
 
 if [ -f "$LIST_FILE" ]; then
-    # 读取文件到数组，并过滤注释和空行
-    mapfile -t PACKAGE_ARRAY < <(grep -vE "^\s*#|^\s*$" "$LIST_FILE")
+    # Added tr -d '\r' to fix potential Windows line endings
+    mapfile -t PACKAGE_ARRAY < <(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | tr -d '\r')
     
     if [ ${#PACKAGE_ARRAY[@]} -gt 0 ]; then
-        # --- 预处理：构建安装列表并自动纠错 ---
         CLEAN_LIST=""
         for pkg in "${PACKAGE_ARRAY[@]}"; do
-            # 自动修复常见的 imagemagic 拼写错误
             if [ "$pkg" == "imagemagic" ]; then
                 log "-> [Auto-Fix] Correcting typo 'imagemagic' to 'imagemagick'..."
                 pkg="imagemagick"
@@ -118,36 +126,29 @@ if [ -f "$LIST_FILE" ]; then
             CLEAN_LIST+="$pkg "
         done
         
-        log "-> Attempting batch installation of ${#PACKAGE_ARRAY[@]} packages..."
-        
-        # --- 尝试 1: 批量安装 (效率最高) ---
-        # --answerdiff=None --answerclean=None 防止 yay 在编译时因为等待用户输入 y/n 而卡住
+        log "-> Attempting batch installation..."
         if runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None $CLEAN_LIST; then
             success "All dependencies installed successfully (Batch mode)."
         else
-            error "Batch installation failed (likely due to an invalid package name)."
-            warn "Switching to 'One-by-One' mode to ensure valid packages get installed..."
-            
-            # --- 尝试 2: 逐个安装兜底 (容错率高) ---
+            warn "Batch installation failed. Switching to One-by-One mode..."
             for pkg in $CLEAN_LIST; do
-                log "-> Installing: $pkg"
                 if runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$pkg"; then
-                    # 安装成功，不输出额外信息，保持清爽
-                    : 
+                    :
                 else
                     error "Failed to install '$pkg'. Skipping."
                 fi
             done
-            success "Dependency installation process finished (with some errors)."
+            success "Dependency installation process finished."
         fi
     else
         warn "niri-applist.txt is empty."
     fi
 else
-    warn "niri-applist.txt not found at $LIST_FILE. Skipping."
+    warn "niri-applist.txt not found. Skipping dependency installation."
 fi
+
 # ------------------------------------------------------------------------------
-# 5. Clone Dotfiles (With Backup)
+# 5. Clone Dotfiles
 # ------------------------------------------------------------------------------
 log "Step 5/9: Cloning and applying dotfiles..."
 
@@ -156,20 +157,23 @@ TEMP_DIR="/tmp/shorin-repo"
 rm -rf "$TEMP_DIR"
 
 log "-> Cloning repository..."
+# Clone as user
 runuser -u "$TARGET_USER" -- git clone "$REPO_URL" "$TEMP_DIR"
 
 if [ -d "$TEMP_DIR/dotfiles" ]; then
-    # BACKUP LOGIC
     BACKUP_NAME="config_backup_$(date +%s).tar.gz"
     log "-> [BACKUP] Backing up existing ~/.config to ~/$BACKUP_NAME..."
     runuser -u "$TARGET_USER" -- tar -czf "$HOME_DIR/$BACKUP_NAME" -C "$HOME_DIR" .config
     
     log "-> Applying new dotfiles..."
-    cp -rf "$TEMP_DIR/dotfiles/." "$HOME_DIR/"
-    chown -R "$TARGET_USER:$TARGET_USER" "$HOME_DIR"
-    success "Dotfiles applied. Backup saved at ~/$BACKUP_NAME"
+    
+    # [FIXED] Copy AS THE USER so permissions are correct naturally.
+    # No need to chown -R the whole home directory later.
+    runuser -u "$TARGET_USER" -- cp -rf "$TEMP_DIR/dotfiles/." "$HOME_DIR/"
+    
+    success "Dotfiles applied."
 else
-    error "Directory 'dotfiles' not found."
+    error "Directory 'dotfiles' not found in cloned repo."
 fi
 
 # ------------------------------------------------------------------------------
@@ -177,10 +181,13 @@ fi
 # ------------------------------------------------------------------------------
 log "Step 6/9: Setting up Wallpapers..."
 WALL_DEST="$HOME_DIR/Pictures/Wallpapers"
+
 if [ -d "$TEMP_DIR/wallpapers" ]; then
-    mkdir -p "$WALL_DEST"
-    cp -rf "$TEMP_DIR/wallpapers/." "$WALL_DEST/"
-    chown -R "$TARGET_USER:$TARGET_USER" "$HOME_DIR/Pictures"
+    # Create dir as user
+    runuser -u "$TARGET_USER" -- mkdir -p "$WALL_DEST"
+    # Copy as user
+    runuser -u "$TARGET_USER" -- cp -rf "$TEMP_DIR/wallpapers/." "$WALL_DEST/"
+    success "Wallpapers installed."
 fi
 rm -rf "$TEMP_DIR"
 
@@ -190,6 +197,12 @@ rm -rf "$TEMP_DIR"
 log "Step 7/9: Configuring ddcutil..."
 runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed ddcutil-service > /dev/null 2>&1
 gpasswd -a "$TARGET_USER" i2c
+
+# ------------------------------------------------------------------------------
+# [CLEANUP] Remove temporary sudo permissions
+# ------------------------------------------------------------------------------
+log "Removing temporary NOPASSWD sudo access..."
+rm -f "$SUDO_TEMP_FILE"
 
 # ------------------------------------------------------------------------------
 # 8. SwayOSD
@@ -205,9 +218,8 @@ log "Step 9/9: Configuring Auto-login..."
 
 if [ "$SKIP_AUTOLOGIN" = true ]; then
     echo -e "${YELLOW}[INFO] Existing Display Manager detected. Skipping TTY auto-login setup.${NC}"
-    echo -e "${YELLOW}[INFO] Please select 'Niri' from your login screen session menu.${NC}"
 else
-    # 9.1 Getty Auto-login (配置 TTY1 免密登录)
+    # 9.1 Getty
     GETTY_DIR="/etc/systemd/system/getty@tty1.service.d"
     mkdir -p "$GETTY_DIR"
     cat <<EOT > "$GETTY_DIR/autologin.conf"
@@ -216,10 +228,9 @@ ExecStart=
 ExecStart=-/sbin/agetty --noreset --noclear --autologin $TARGET_USER - \${TERM}
 EOT
 
-    # 9.2 Niri User Service (创建 Systemd 用户服务文件)
+    # 9.2 Service File
     USER_SYSTEMD_DIR="$HOME_DIR/.config/systemd/user"
     mkdir -p "$USER_SYSTEMD_DIR"
-    
     cat <<EOT > "$USER_SYSTEMD_DIR/niri-autostart.service"
 [Unit]
 Description=Niri Session Autostart
@@ -233,18 +244,14 @@ Restart=on-failure
 WantedBy=default.target
 EOT
 
-    # 9.3 Manually Enable the Service (手动模拟 systemctl enable)
-    # 这一步代替了原来的 runuser systemctl 命令，解决了 DBus 连接失败的问题
+    # 9.3 Manual Symlink
     log "-> Enabling niri-autostart.service (Manual Symlink)..."
-    
     WANTS_DIR="$USER_SYSTEMD_DIR/default.target.wants"
     mkdir -p "$WANTS_DIR"
-    
-    # 创建软链接：从 wants 目录指回上一级的 .service 文件
     ln -sf "../niri-autostart.service" "$WANTS_DIR/niri-autostart.service"
 
-    # 9.4 Fix Permissions (至关重要：把所有权还给用户)
-    log "-> Fixing permissions for .config..."
+    # 9.4 Permission Fix
+    # Only fixing ownership for .config is safe and necessary because we wrote files as root above
     chown -R "$TARGET_USER:$TARGET_USER" "$HOME_DIR/.config"
     
     success "TTY Auto-login configured."
