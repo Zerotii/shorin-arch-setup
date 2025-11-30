@@ -1,0 +1,17 @@
+# --- System Packages (Yay/Pacman) ---
+steam
+mpv
+linuxqq-appimage
+wechat-appimage
+gnome-font-viewer
+gnome-clocks
+gnome-calendar
+fragments
+typora-free
+
+# --- Flatpak Packages (Prefix with flatpak:) ---
+flatpak:io.github.fabrialberio.pinapp
+flatpak:it.mijorus.gearlever
+flatpak:com.obsproject.Studio
+flatpak:com.github.wwmm.easyeffects
+flatpak:io.github.ilya_zlobintsev.LACT

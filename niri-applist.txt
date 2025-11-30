@@ -36,3 +36,4 @@ jq
 imagemagick
 swaybg
 imv
+mission-center

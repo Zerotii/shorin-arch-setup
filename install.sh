@@ -36,6 +36,7 @@ MODULES=(
     "02-musthave.sh"
     "03-user.sh"
     "04-niri-setup.sh"
+    "05-apps.sh"
 )
 
 # Create state file if not exists
