@@ -34,3 +34,4 @@ yazi
 fish
 jq
 imagemagick
+swaybg

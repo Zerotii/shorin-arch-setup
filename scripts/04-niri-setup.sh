@@ -111,7 +111,7 @@ chmod 440 "$SUDO_TEMP_FILE"
 log "Step 4/9: Installing dependencies from niri-applist.txt..."
 
 LIST_FILE="$PARENT_DIR/niri-applist.txt"
-FAILED_PACKAGES=() # Initialize failure array
+FAILED_PACKAGES=()
 
 if [ -f "$LIST_FILE" ]; then
     mapfile -t PACKAGE_ARRAY < <(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | tr -d '\r')
@@ -120,9 +120,10 @@ if [ -f "$LIST_FILE" ]; then
         BATCH_LIST=""
         GIT_LIST=()
 
-        # Sort packages
         for pkg in "${PACKAGE_ARRAY[@]}"; do
             if [ "$pkg" == "imagemagic" ]; then pkg="imagemagick"; fi
+            
+            # 这里不再过滤 awww，让它尝试通过 AUR 安装
             
             if [[ "$pkg" == *"-git" ]]; then
                 GIT_LIST+=("$pkg")
@@ -131,7 +132,7 @@ if [ -f "$LIST_FILE" ]; then
             fi
         done
         
-        # --- Phase 1: Batch Install Standard Packages ---
+        # --- Phase 1: Batch Install ---
         if [ -n "$BATCH_LIST" ]; then
             log "-> [Batch] Installing standard repository packages..."
             if runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
@@ -142,56 +143,84 @@ if [ -f "$LIST_FILE" ]; then
                     if runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$pkg"; then
                         :
                     else
-                        warn "Failed to install '$pkg'. Retrying (Attempt 2/2)..."
+                        warn "Failed to install '$pkg'. Retrying..."
                         if runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$pkg"; then
-                             success "Installed '$pkg' on second attempt."
+                             success "Installed '$pkg' on retry."
                         else
                              error "Failed to install '$pkg' after 2 attempts."
-                             FAILED_PACKAGES+=("$pkg") # Record failure
+                             FAILED_PACKAGES+=("$pkg")
                         fi
                     fi
                 done
             fi
         fi
 
-        # --- Phase 2: One-by-One Install Git Packages ---
+        # --- Phase 2: Git Install ---
         if [ ${#GIT_LIST[@]} -gt 0 ]; then
-            log "-> [Slow] Installing ${#GIT_LIST[@]} '-git' packages individually..."
+            log "-> [Slow] Installing '-git' packages individually..."
             for git_pkg in "${GIT_LIST[@]}"; do
                 log "-> Compiling/Installing: $git_pkg ..."
                 if runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
                     success "Installed: $git_pkg"
                 else
-                    warn "Failed to install '$git_pkg'. Retrying (Attempt 2/2)..."
+                    warn "Failed to install '$git_pkg'. Retrying..."
                     if runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
                         success "Installed: $git_pkg (on retry)"
                     else
                         error "Failed to install: $git_pkg after 2 attempts."
-                        FAILED_PACKAGES+=("$git_pkg") # Record failure
+                        FAILED_PACKAGES+=("$git_pkg")
                     fi
                 fi
             done
         fi
         
-        # --- Report Generation Logic ---
+        # ----------------------------------------------------------------------
+        # [RECOVERY PHASE] Logic for Awww & Waybar Fallback
+        # ----------------------------------------------------------------------
+        log "Running Recovery Checks for critical components..."
+
+        # 1. Waybar Recovery
+        if ! command -v waybar &> /dev/null; then
+            warn "Waybar binary not found (Git compilation likely failed)."
+            log "-> Installing standard 'waybar' package from official repos..."
+            if pacman -S --noconfirm --needed waybar > /dev/null 2>&1; then
+                success "Standard Waybar installed as fallback."
+                # 从失败列表中移除 waybar 相关的包，避免误报
+                # (这里简化处理，不从数组删除了，只保证软件可用)
+            else
+                error "Failed to install standard Waybar."
+            fi
+        fi
+
+        # 2. Awww Recovery (Local Binary Fallback)
+        if ! command -v awww &> /dev/null; then
+            warn "Awww binary not found (AUR compilation failed)."
+            
+            LOCAL_BIN_AWWW="$PARENT_DIR/bin/awww"
+            LOCAL_BIN_DAEMON="$PARENT_DIR/bin/awww-daemon"
+            
+            if [ -f "$LOCAL_BIN_AWWW" ] && [ -f "$LOCAL_BIN_DAEMON" ]; then
+                log "-> Found local binaries in bin/. Installing manually..."
+                cp "$LOCAL_BIN_AWWW" /usr/local/bin/awww
+                cp "$LOCAL_BIN_DAEMON" /usr/local/bin/awww-daemon
+                chmod +x /usr/local/bin/awww /usr/local/bin/awww-daemon
+                success "Awww & Daemon installed from local backup."
+            else
+                warn "Local binaries not found in $PARENT_DIR/bin/. Cannot recover Awww."
+                # 这里不退缩，会在后面 Step 5 做 swaybg 最终兜底
+            fi
+        fi
+
+        # --- Failure Report Generation ---
         if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
             DOCS_DIR="$HOME_DIR/Documents"
             REPORT_FILE="$DOCS_DIR/安装失败的软件.txt"
+            if [ ! -d "$DOCS_DIR" ]; then runuser -u "$TARGET_USER" -- mkdir -p "$DOCS_DIR"; fi
             
-            # Ensure Documents directory exists
-            if [ ! -d "$DOCS_DIR" ]; then
-                runuser -u "$TARGET_USER" -- mkdir -p "$DOCS_DIR"
-            fi
-            
-            log "Generating failure report..."
-            # Print array to file
             printf "%s\n" "${FAILED_PACKAGES[@]}" > "$REPORT_FILE"
-            # Give ownership to user
             chown "$TARGET_USER:$TARGET_USER" "$REPORT_FILE"
             
-            echo -e "${RED}[ATTENTION] The following packages failed to install:${NC}"
-            printf " - %s\n" "${FAILED_PACKAGES[@]}"
-            echo -e "${YELLOW}A list has been saved to: $REPORT_FILE${NC}"
+            echo -e "${RED}[ATTENTION] Some packages failed to install. List saved to: $REPORT_FILE${NC}"
         else
             success "All dependencies installed successfully!"
         fi
@@ -223,6 +252,24 @@ if [ -d "$TEMP_DIR/dotfiles" ]; then
     log "-> Applying new dotfiles..."
     runuser -u "$TARGET_USER" -- cp -rf "$TEMP_DIR/dotfiles/." "$HOME_DIR/"
     success "Dotfiles applied."
+    
+    # --- [ULTIMATE FALLBACK] Check Awww status ---
+    # 如果 AUR 挂了，且本地 bin 也没文件，这里会触发 Swaybg 兜底
+    if ! command -v awww &> /dev/null; then
+        warn "Awww is still NOT working (All install methods failed). Switching to swaybg..."
+        
+        # 1. Install swaybg
+        pacman -S --noconfirm --needed swaybg > /dev/null 2>&1
+        
+        # 2. Patch script
+        SCRIPT_PATH="$HOME_DIR/.config/scripts/niri_set_overview_blur_dark_bg.sh"
+        if [ -f "$SCRIPT_PATH" ]; then
+            log "-> Patching $SCRIPT_PATH to use swaybg..."
+            sed -i 's/^WALLPAPER_BACKEND="awww"/WALLPAPER_BACKEND="swaybg"/' "$SCRIPT_PATH"
+            success "Fallback applied: switched to swaybg."
+        fi
+    fi
+
 else
     error "Directory 'dotfiles' not found in cloned repo."
 fi
@@ -299,7 +346,7 @@ EOT
     mkdir -p "$WANTS_DIR"
     ln -sf "../niri-autostart.service" "$WANTS_DIR/niri-autostart.service"
 
-    # 9.4 Permission Fix (Surgical)
+    # 9.4 Permission Fix
     chown -R "$TARGET_USER:$TARGET_USER" "$HOME_DIR/.config/systemd"
     
     success "TTY Auto-login configured."
