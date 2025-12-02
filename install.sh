@@ -15,14 +15,14 @@ else
     exit 1
 fi
 
-# --- Environment ---
+# --- Environment Propagation ---
 export DEBUG=${DEBUG:-0}
 export CN_MIRROR=${CN_MIRROR:-0}
 
 check_root
 chmod +x "$SCRIPTS_DIR"/*.sh
 
-# --- Banner Functions ---
+# --- ASCII Banners ---
 banner1() {
 cat << "EOF"
    _____ __  ______  ____  _____   __
@@ -32,6 +32,7 @@ cat << "EOF"
 /____/_/ /_/\____/_/ |_/___/_/ |_/   
 EOF
 }
+
 banner2() {
 cat << "EOF"
   ██████  ██   ██  ██████  ██████  ██ ███    ██ 
@@ -41,6 +42,7 @@ cat << "EOF"
   ██████  ██   ██  ██████  ██   ██ ██ ██   ████ 
 EOF
 }
+
 banner3() {
 cat << "EOF"
    ______ __ __   ___   ____   ____  _   _ 
@@ -122,6 +124,7 @@ sys_dashboard() {
         done_count=$(wc -l < "$STATE_FILE")
         echo -e "${H_BLUE}║${NC} ${BOLD}Progress${NC} : Resuming ($done_count modules done)"
     fi
+    
     echo -e "${H_BLUE}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -157,8 +160,61 @@ CURRENT_STEP=0
 log "Initializing installer sequence..."
 sleep 0.5
 
-# Global Update
+# --- [NEW] Reflector Mirror Update ---
+section "Pre-Flight" "Mirrorlist Optimization"
+log "Checking Reflector..."
+exe pacman -Sy --noconfirm --needed reflector
+
+CURRENT_TZ=$(readlink -f /etc/localtime)
+REFLECTOR_ARGS="-a 24 -f 10 --sort score --save /etc/pacman.d/mirrorlist --verbose"
+
+if [[ "$CURRENT_TZ" == *"Shanghai"* ]]; then
+    # China Special Handling
+    echo ""
+    echo -e "${H_YELLOW}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${H_YELLOW}║  DETECTED TIMEZONE: Asia/Shanghai                                ║${NC}"
+    echo -e "${H_YELLOW}║  Refreshing mirrors in China can be slow or unstable.            ║${NC}"
+    echo -e "${H_YELLOW}║  Do you want to force refresh mirrors with Reflector?            ║${NC}"
+    echo -e "${H_YELLOW}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    read -t 60 -p "$(echo -e "   ${H_CYAN}Run Reflector? [y/N] (Default No in 60s): ${NC}")" choice
+    if [ $? -ne 0 ]; then echo ""; fi
+    choice=${choice:-N}
+    
+    if [[ "$choice" =~ ^[Yy]$ ]]; then
+        log "Running Reflector for China..."
+        if exe reflector $REFLECTOR_ARGS -c China; then
+            success "Mirrors updated."
+        else
+            warn "Reflector failed. Continuing with existing mirrors."
+        fi
+    else
+        log "Skipping mirror refresh."
+    fi
+else
+    # Global: Auto-detect country code via IP
+    log "Detecting location for optimization..."
+    COUNTRY_CODE=$(curl -s --max-time 2 https://ipinfo.io/country)
+    
+    if [ -n "$COUNTRY_CODE" ]; then
+        info_kv "Country" "$COUNTRY_CODE" "(Auto-detected)"
+        log "Running Reflector for $COUNTRY_CODE..."
+        if ! exe reflector $REFLECTOR_ARGS -c "$COUNTRY_CODE"; then
+            warn "Country specific refresh failed. Trying global speed test..."
+            exe reflector $REFLECTOR_ARGS
+        fi
+    else
+        warn "Could not detect country. Running global speed test..."
+        exe reflector $REFLECTOR_ARGS
+    fi
+    success "Mirrorlist optimized."
+fi
+
+# --- Global System Update ---
 section "Pre-Flight" "System Synchronization"
+log "Ensuring system is up-to-date..."
+
 if exe pacman -Syu --noconfirm; then
     success "System Updated."
 else
@@ -166,6 +222,7 @@ else
     exit 1
 fi
 
+# --- Module Loop ---
 for module in "${MODULES[@]}"; do
     CURRENT_STEP=$((CURRENT_STEP + 1))
     script_path="$SCRIPTS_DIR/$module"
@@ -181,7 +238,14 @@ for module in "${MODULES[@]}"; do
         echo -e "   ${H_GREEN}✔${NC} Module previously completed."
         read -p "$(echo -e "   ${H_YELLOW}Skip this module? [Y/n] ${NC}")" skip_choice
         skip_choice=${skip_choice:-Y}
-        if [[ "$skip_choice" =~ ^[Yy]$ ]]; then log "Skipping..."; continue; else log "Force re-running..."; sed -i "/^${module}$/d" "$STATE_FILE"; fi
+        
+        if [[ "$skip_choice" =~ ^[Yy]$ ]]; then
+            log "Skipping..."
+            continue
+        else
+            log "Force re-running..."
+            sed -i "/^${module}$/d" "$STATE_FILE"
+        fi
     fi
 
     bash "$script_path"
@@ -200,7 +264,7 @@ for module in "${MODULES[@]}"; do
     fi
 done
 
-# Completion
+# --- Completion ---
 clear
 show_banner
 echo -e "${H_GREEN}╔══════════════════════════════════════════════════════╗${NC}"

@@ -21,6 +21,7 @@ install_local_fallback() {
     local pkg_file=$(find "$search_dir" -maxdepth 1 -name "*.pkg.tar.zst" | head -n 1)
     if [ -f "$pkg_file" ]; then
         warn "Network install failed. Using local fallback..."
+        # yay -U installs local file, handling deps. No -Syu needed here.
         if exe runuser -u "$TARGET_USER" -- yay -U --noconfirm "$pkg_file"; then
             success "Installed from local."; return 0
         else
@@ -48,7 +49,7 @@ info_kv "Target" "$TARGET_USER"
 section "Step 1/5" "Plasma Core"
 
 log "Installing KDE Plasma Meta & Apps..."
-# Removed flatpak/flatpak-kcm from here, moved to Step 2 for clarity
+# [FIX] -S -> -Syu
 KDE_PKGS="plasma-meta konsole dolphin kate firefox qt6-multimedia-ffmpeg pipewire-jack"
 exe pacman -Syu --noconfirm --needed $KDE_PKGS
 success "KDE Plasma installed."
@@ -60,14 +61,13 @@ section "Step 2/5" "Software Store & Network"
 
 log "Configuring Discover & Flatpak..."
 
-# 1. Install Flatpak backend for KDE
-# flatpak-kcm allows managing Flatpak repos/permissions in KDE System Settings
+# [FIX] -S -> -Syu
 exe pacman -Syu --noconfirm --needed flatpak flatpak-kcm
 
-# 2. Add Official Flathub (Default)
+# Add Official Flathub
 exe flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
-# 3. Network Optimization (Mirror Logic)
+# Network Optimization (Mirror Logic)
 IS_CN_ENV=false
 if [ "$CN_MIRROR" == "1" ] || [ "$DEBUG" == "1" ]; then
     IS_CN_ENV=true
@@ -76,7 +76,6 @@ if [ "$CN_MIRROR" == "1" ] || [ "$DEBUG" == "1" ]; then
     log "Enabling China Optimizations..."
     
     # Flatpak Mirror
-    log "-> Switching Flathub to USTC Mirror..."
     exe flatpak remote-modify flathub --url=https://mirrors.ustc.edu.cn/flathub
     
     # GOPROXY
@@ -116,13 +115,19 @@ if [ -f "$LIST_FILE" ]; then
         # Phase 1: Batch
         if [ -n "$BATCH_LIST" ]; then
             log "Batch Install..."
+            # [FIX] yay -S -> yay -Syu
             if ! exe runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
                 warn "Batch failed. Retrying with Mirror Toggle..."
+                
+                # Toggle Mirror
                 if runuser -u "$TARGET_USER" -- git config --global --get url."https://gitclone.com/github.com/".insteadOf > /dev/null; then
                     runuser -u "$TARGET_USER" -- git config --global --unset url."https://gitclone.com/github.com/".insteadOf
                 else
                     runuser -u "$TARGET_USER" -- git config --global url."https://gitclone.com/github.com/".insteadOf "https://github.com/"
                 fi
+                
+                # Retry
+                # [FIX] yay -S -> yay -Syu
                 if ! exe runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
                     error "Batch failed."
                 else
@@ -135,8 +140,10 @@ if [ -f "$LIST_FILE" ]; then
         if [ ${#GIT_LIST[@]} -gt 0 ]; then
             log "Git Install..."
             for git_pkg in "${GIT_LIST[@]}"; do
+                # [FIX] yay -S -> yay -Syu
                 if ! exe runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
                     warn "Retrying $git_pkg..."
+                    
                     # Toggle Mirror
                     if runuser -u "$TARGET_USER" -- git config --global --get url."https://gitclone.com/github.com/".insteadOf > /dev/null; then
                         runuser -u "$TARGET_USER" -- git config --global --unset url."https://gitclone.com/github.com/".insteadOf
@@ -144,6 +151,8 @@ if [ -f "$LIST_FILE" ]; then
                         runuser -u "$TARGET_USER" -- git config --global url."https://gitclone.com/github.com/".insteadOf "https://github.com/"
                     fi
                     
+                    # Retry
+                    # [FIX] yay -S -> yay -Syu
                     if ! exe runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
                         warn "Checking local cache..."
                         if install_local_fallback "$git_pkg"; then :; else
