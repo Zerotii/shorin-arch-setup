@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Shorin Arch Setup - Main Installer (v4.0)
+# Shorin Arch Setup - Main Installer (v5.0 Safety Net)
 # ==============================================================================
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,14 +15,75 @@ else
     exit 1
 fi
 
-# --- Environment Propagation ---
+# --- Environment ---
 export DEBUG=${DEBUG:-0}
 export CN_MIRROR=${CN_MIRROR:-0}
 
 check_root
 chmod +x "$SCRIPTS_DIR"/*.sh
 
-# --- ASCII Banners ---
+# --- Helper: Emergency Rollback ---
+trigger_emergency_recovery() {
+    local err_code=$1
+    
+    echo ""
+    echo -e "${H_RED}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${H_RED}║  CRITICAL FAILURE DETECTED (Exit Code: $err_code)                     ║${NC}"
+    echo -e "${H_RED}║  The installation script encountered an unrecoverable error.     ║${NC}"
+    echo -e "${H_RED}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    # 1. Find the specific safety snapshot
+    if ! command -v snapper &> /dev/null; then
+        warn "Snapper not found. Cannot perform rollback."
+        return
+    fi
+
+    # Filter for our specific description to avoid confusing with pacman snapshots
+    local SNAP_ID=$(snapper -c root list --columns number,description | grep "Before Shorin Setup" | tail -n 1 | awk '{print $1}')
+
+    if [ -z "$SNAP_ID" ]; then
+        warn "Initial safety snapshot 'Before Shorin Setup' not found."
+        return
+    fi
+
+    echo -e "   ${H_YELLOW}A safety snapshot (ID: ${BOLD}$SNAP_ID${NC}${H_YELLOW}) was created before installation.${NC}"
+    echo -e "   You can revert all system changes made by this script right now."
+    echo ""
+    echo -e "   ${BOLD}Manual Recovery Command:${NC}"
+    echo -e "   ${H_CYAN}sudo snapper -c root undochange $SNAP_ID..0 && reboot${NC}"
+    echo ""
+
+    # 2. Ask User
+    # Clear input buffer first
+    while read -r -t 0; do read -r; done
+    
+    read -p "$(echo -e "   ${H_RED}${BOLD}Do you want to ROLLBACK system changes and REBOOT now? [y/N]: ${NC}")" choice
+    
+    if [[ "$choice" =~ ^[Yy]$ ]]; then
+        echo ""
+        log "Performing emergency rollback to snapshot $SNAP_ID..."
+        
+        # undochange $ID..0 means: revert differences between Snapshot and Current State (0)
+        if exe snapper -c root undochange "$SNAP_ID..0"; then
+            success "System files reverted."
+            
+            # Clean up state file so next run starts fresh
+            rm -f "$STATE_FILE"
+            
+            echo -e "${H_GREEN}>>> Rebooting to apply rollback...${NC}"
+            sleep 2
+            systemctl reboot
+        else
+            error "Rollback failed."
+        fi
+    else
+        log "Rollback skipped. You are in a partially installed state."
+        echo -e "   Please fix the issue and re-run ${BOLD}./install.sh${NC}"
+    fi
+}
+
+# --- Banner Functions ---
 banner1() {
 cat << "EOF"
    _____ __  ______  ____  _____   __
@@ -32,17 +93,15 @@ cat << "EOF"
 /____/_/ /_/\____/_/ |_/___/_/ |_/   
 EOF
 }
-
 banner2() {
 cat << "EOF"
   ██████  ██   ██  ██████  ██████  ██ ███    ██ 
-  ██      ██   ██ ██    ██ ██   ██ ██ ████   ██ 
+  ██      ██   ██ ██    ██ ██████  ██ ██ ██  ██ 
   ███████ ███████ ██    ██ ██████  ██ ██ ██  ██ 
        ██ ██   ██ ██    ██ ██   ██ ██ ██  ██ ██ 
   ██████  ██   ██  ██████  ██   ██ ██ ██   ████ 
 EOF
 }
-
 banner3() {
 cat << "EOF"
    ______ __ __   ___   ____   ____  _   _ 
@@ -65,7 +124,7 @@ show_banner() {
         2) banner3 ;;
     esac
     echo -e "${NC}"
-    echo -e "${DIM}   :: Arch Linux Automation Protocol :: v4.0 ::${NC}"
+    echo -e "${DIM}   :: Arch Linux Automation Protocol :: v5.0 ::${NC}"
     echo ""
 }
 
@@ -124,7 +183,6 @@ sys_dashboard() {
         done_count=$(wc -l < "$STATE_FILE")
         echo -e "${H_BLUE}║${NC} ${BOLD}Progress${NC} : Resuming ($done_count modules done)"
     fi
-    
     echo -e "${H_BLUE}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -138,7 +196,7 @@ sys_dashboard
 
 # Dynamic Module List
 BASE_MODULES=(
-    "00-btrfs-init.sh"
+    "00-btrfs-init.sh"  # Critical: Must be first to create snapshot
     "01-base.sh"
     "02-musthave.sh"
     "03-user.sh"
@@ -161,7 +219,13 @@ CURRENT_STEP=0
 log "Initializing installer sequence..."
 sleep 0.5
 
-# --- [NEW] Reflector Mirror Update ---
+# --- Pacman Lock Fix ---
+if [ -f /var/lib/pacman/db.lck ]; then
+    echo -e "${H_YELLOW}   [!] Pacman lock file detected. Removing it...${NC}"
+    rm /var/lib/pacman/db.lck
+fi
+
+# --- Reflector ---
 section "Pre-Flight" "Mirrorlist Optimization"
 log "Checking Reflector..."
 exe pacman -Sy --noconfirm --needed reflector
@@ -170,11 +234,10 @@ CURRENT_TZ=$(readlink -f /etc/localtime)
 REFLECTOR_ARGS="-a 24 -f 10 --sort score --save /etc/pacman.d/mirrorlist --verbose"
 
 if [[ "$CURRENT_TZ" == *"Shanghai"* ]]; then
-    # China Special Handling
     echo ""
     echo -e "${H_YELLOW}╔══════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${H_YELLOW}║  DETECTED TIMEZONE: Asia/Shanghai                                ║${NC}"
-    echo -e "${H_YELLOW}║  Refreshing mirrors in China can be slow or unstable.            ║${NC}"
+    echo -e "${H_YELLOW}║  Refreshing mirrors in China can be slow.                        ║${NC}"
     echo -e "${H_YELLOW}║  Do you want to force refresh mirrors with Reflector?            ║${NC}"
     echo -e "${H_YELLOW}╚══════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -194,7 +257,6 @@ if [[ "$CURRENT_TZ" == *"Shanghai"* ]]; then
         log "Skipping mirror refresh."
     fi
 else
-    # Global: Auto-detect country code via IP
     log "Detecting location for optimization..."
     COUNTRY_CODE=$(curl -s --max-time 2 https://ipinfo.io/country)
     
@@ -212,10 +274,9 @@ else
     success "Mirrorlist optimized."
 fi
 
-# --- Global System Update ---
+# --- Global Update ---
 section "Pre-Flight" "System Synchronization"
 log "Ensuring system is up-to-date..."
-
 if exe pacman -Syu --noconfirm; then
     success "System Updated."
 else
@@ -239,14 +300,7 @@ for module in "${MODULES[@]}"; do
         echo -e "   ${H_GREEN}✔${NC} Module previously completed."
         read -p "$(echo -e "   ${H_YELLOW}Skip this module? [Y/n] ${NC}")" skip_choice
         skip_choice=${skip_choice:-Y}
-        
-        if [[ "$skip_choice" =~ ^[Yy]$ ]]; then
-            log "Skipping..."
-            continue
-        else
-            log "Force re-running..."
-            sed -i "/^${module}$/d" "$STATE_FILE"
-        fi
+        if [[ "$skip_choice" =~ ^[Yy]$ ]]; then log "Skipping..."; continue; else log "Force re-running..."; sed -i "/^${module}$/d" "$STATE_FILE"; fi
     fi
 
     bash "$script_path"
@@ -254,13 +308,18 @@ for module in "${MODULES[@]}"; do
 
     if [ $exit_code -eq 0 ]; then
         echo "$module" >> "$STATE_FILE"
-    else
+    
+    elif [ $exit_code -eq 130 ]; then
+        # [NEW] Handle Ctrl+C (SIGINT) Gracefully
         echo ""
-        echo -e "${H_RED}╔════ CRITICAL FAILURE ════════════════════════════════╗${NC}"
-        echo -e "${H_RED}║ Module '$module' failed with exit code $exit_code.${NC}"
-        echo -e "${H_RED}║ Check log: $TEMP_LOG_FILE${NC}"
-        echo -e "${H_RED}╚══════════════════════════════════════════════════════╝${NC}"
-        write_log "FATAL" "Module $module failed"
+        warn "Script interrupted by user (Ctrl+C)."
+        log "Exiting without rollback. You can resume later."
+        exit 130
+    
+    else
+        # [NEW] Handle CRITICAL FAILURE -> Trigger Rollback
+        write_log "FATAL" "Module $module failed with exit code $exit_code"
+        trigger_emergency_recovery $exit_code
         exit 1
     fi
 done
@@ -276,7 +335,12 @@ echo ""
 if [ -f "$STATE_FILE" ]; then rm "$STATE_FILE"; fi
 
 log "Archiving log..."
-FINAL_USER=$(awk -F: '$3 == 1000 {print $1}' /etc/passwd)
+if [ -f "/tmp/shorin_install_user" ]; then
+    FINAL_USER=$(cat /tmp/shorin_install_user)
+else
+    FINAL_USER=$(awk -F: '$3 == 1000 {print $1}' /etc/passwd)
+fi
+
 if [ -n "$FINAL_USER" ]; then
     FINAL_DOCS="/home/$FINAL_USER/Documents"
     mkdir -p "$FINAL_DOCS"
@@ -287,7 +351,9 @@ fi
 
 echo ""
 echo -e "${H_YELLOW}>>> System requires a REBOOT.${NC}"
+
 while read -r -t 0; do read -r; done
+
 for i in {10..1}; do
     echo -ne "\r   ${DIM}Auto-rebooting in ${i}s... (Press 'n' to cancel)${NC}"
     read -t 1 -N 1 input
