@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# 04-niri-setup.sh - Niri Desktop (Visual Enhanced)
+# 04-niri-setup.sh - Niri Desktop (Visual Enhanced & Logic Fix)
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,47 +13,39 @@ CN_MIRROR=${CN_MIRROR:-0}
 
 check_root
 
-# --- Helper: Local Fallback (FIXED) ---
+# --- Helper: Local Fallback (Fixed: Multiple files & Dependencies) ---
 install_local_fallback() {
     local pkg_name="$1"
     local search_dir="$PARENT_DIR/compiled/$pkg_name"
     if [ ! -d "$search_dir" ]; then return 1; fi
 
-    # [FIX] 使用 mapfile 读取所有匹配的包文件到数组，而不是只取第一个
+    # 读取目录下所有包文件
     mapfile -t pkg_files < <(find "$search_dir" -maxdepth 1 -name "*.pkg.tar.zst")
 
     if [ ${#pkg_files[@]} -gt 0 ]; then
         warn "Using local fallback for '$pkg_name' (Found ${#pkg_files[@]} files)..."
+        warn "Note: This uses cached binaries. If the app crashes, please rebuild from source."
 
-        # [FIX] 1. 遍历所有找到的包，收集所有依赖
+        # 1. 收集依赖
         log "Resolving dependencies for local packages..."
         local all_deps=""
-        
         for pkg_file in "${pkg_files[@]}"; do
-            # 从每个包的 .PKGINFO 中提取依赖
             local deps=$(tar -xOf "$pkg_file" .PKGINFO | grep -E '^depend' | cut -d '=' -f 2 | xargs)
-            if [ -n "$deps" ]; then
-                all_deps="$all_deps $deps"
-            fi
+            if [ -n "$deps" ]; then all_deps="$all_deps $deps"; fi
         done
         
-        # [FIX] 2. 统一安装依赖
+        # 2. 安装依赖 (使用 -Syu 确保系统同步)
         if [ -n "$all_deps" ]; then
-            # 简单的去重处理 (虽然 yay 也能处理重复，但这样日志更好看)
             local unique_deps=$(echo "$all_deps" | tr ' ' '\n' | sort -u | tr '\n' ' ')
-            log "Dependencies found: $unique_deps"
-            
-            # 安装依赖
-            if ! exe runuser -u "$TARGET_USER" -- yay -S --noconfirm --needed --asdeps $unique_deps; then
+            # [UPDATE] Changed yay -S to yay -Syu
+            if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --asdeps $unique_deps; then
                 error "Failed to install dependencies for local package '$pkg_name'."
                 return 1
             fi
         fi
 
-        log "Dependencies met. Installing all local packages..."
-        
-        # [FIX] 3. 一次性安装目录下所有的包文件
-        # "${pkg_files[@]}" 会正确展开为多个参数传递给 yay
+        # 3. 批量安装
+        log "Installing local packages..."
         if exe runuser -u "$TARGET_USER" -- yay -U --noconfirm "${pkg_files[@]}"; then
             success "Installed from local."; return 0
         else
@@ -153,7 +145,7 @@ if [ -f "$DESKTOP_FILE" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 3. Network Optimization (Updated Mirror Menu)
+# 3. Network Optimization
 # ------------------------------------------------------------------------------
 section "Step 3/9" "Network Optimization"
 exe pacman -Syu --noconfirm --needed flatpak gnome-software
@@ -176,7 +168,6 @@ fi
 if [ "$IS_CN_ENV" = true ]; then
     log "Enabling China Optimizations..."
     
-    # 调用通用函数来选择镜像
     select_flathub_mirror
     
     success "Optimizations Enabled."
@@ -190,7 +181,7 @@ echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDO_TEMP_FILE"
 chmod 440 "$SUDO_TEMP_FILE"
 
 # ------------------------------------------------------------------------------
-# 4. Dependencies
+# 4. Dependencies (LOGIC REWRITE: Network First -> Local Fallback)
 # ------------------------------------------------------------------------------
 section "Step 4/9" "Dependencies"
 LIST_FILE="$PARENT_DIR/niri-applist.txt"
@@ -206,14 +197,10 @@ if [ -f "$LIST_FILE" ]; then
             if [[ "$pkg" == *"-git" || "$pkg" == "clipse-gui" ]]; then GIT_LIST+=("$pkg"); else BATCH_LIST+="$pkg "; fi
         done
 
-        # 根据中文环境标志，重排安装列表
-        if [ "$IS_CN_ENV" = true ]; then
-            log "CN environment detected. Prioritizing local packages."
-        fi
-        
-        # Batch
+        # Phase 1: Batch Install (Repository Packages)
         if [ -n "$BATCH_LIST" ]; then
             log "Batch Install..."
+            # [UPDATE] Ensuring -Syu
             if ! exe runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
                 warn "Batch failed. Retrying..."
                 if runuser -u "$TARGET_USER" -- git config --global --get url."https://gitclone.com/github.com/".insteadOf > /dev/null; then
@@ -229,49 +216,35 @@ if [ -f "$LIST_FILE" ]; then
             fi
         fi
 
-        # Git
+        # Phase 2: Git/AUR Packages (Priority: Build from Source)
         if [ ${#GIT_LIST[@]} -gt 0 ]; then
-            log "Git Install..."
+            log "Git/AUR Install..."
             for git_pkg in "${GIT_LIST[@]}"; do
-                # --- 新逻辑：CN 环境本地优先 ---
-                if [ "$IS_CN_ENV" = true ]; then
-                    log "Attempting local install for '$git_pkg'..."
-                    if install_local_fallback "$git_pkg"; then
-                        success "Installed $git_pkg from local cache."
-                        continue # 安装成功，跳过网络安装
-                    else
-                        log "Local package not found. Proceeding with network install..."
-                    fi
-                fi
-
-                # --- 标准网络安装流程 (作为回退或默认) ---
-                # 尝试 1: 正常网络安装
+                log "Installing '$git_pkg' (Network Build)..."
+                
+                # [UPDATE] Ensuring -Syu
                 if exe runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
-                    success "Installed $git_pkg"
+                    success "Installed $git_pkg (Built from source)."
                 else
-                    # 尝试 2: 切换镜像后重试
-                    warn "Network install failed for $git_pkg. Retrying with mirror toggle..."
+                    warn "Network build failed for '$git_pkg'."
+                    warn "Retrying with mirror toggle..."
+                    
                     if runuser -u "$TARGET_USER" -- git config --global --get url."https://gitclone.com/github.com/".insteadOf > /dev/null; then
                         runuser -u "$TARGET_USER" -- git config --global --unset url."https://gitclone.com/github.com/".insteadOf
                     else
                         runuser -u "$TARGET_USER" -- git config --global url."https://gitclone.com/github.com/".insteadOf "https://github.com/"
                     fi
 
+                    # [UPDATE] Ensuring -Syu
                     if exe runuser -u "$TARGET_USER" -- env GOPROXY=$GOPROXY yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
-                        success "Installed $git_pkg (on retry)."
+                        success "Installed $git_pkg (Built from source - Retry)."
                     else
-                        # 尝试 3: 如果不是CN环境，最后尝试本地回退
-                        if [ "$IS_CN_ENV" = false ]; then
-                            warn "Final attempt: Checking local cache for $git_pkg..."
-                            if install_local_fallback "$git_pkg"; then
-                                success "Installed $git_pkg from local cache (fallback)."
-                            else
-                                error "Failed to install '$git_pkg' after all attempts."
-                                FAILED_PACKAGES+=("$git_pkg")
-                            fi
+                        # --- Fallback: Try Local Cache ---
+                        warn "Network failed. Attempting local fallback for '$git_pkg'..."
+                        if install_local_fallback "$git_pkg"; then
+                            warn "INSTALLED FROM LOCAL CACHE. If '$git_pkg' fails to launch, you must rebuild it manually."
                         else
-                            # CN环境下，本地安装已在最开始尝试过
-                            error "Failed to install '$git_pkg' after all attempts."
+                            error "Failed to install '$git_pkg' (Both Network and Local failed)."
                             FAILED_PACKAGES+=("$git_pkg")
                         fi
                     fi
@@ -289,9 +262,13 @@ if [ -f "$LIST_FILE" ]; then
             DOCS_DIR="$HOME_DIR/Documents"
             REPORT_FILE="$DOCS_DIR/安装失败的软件.txt"
             if [ ! -d "$DOCS_DIR" ]; then runuser -u "$TARGET_USER" -- mkdir -p "$DOCS_DIR"; fi
-            printf "%s\n" "${FAILED_PACKAGES[@]}" > "$REPORT_FILE"
+            
+            echo "--- Installation Failed Report $(date) ---" >> "$REPORT_FILE"
+            printf "%s\n" "${FAILED_PACKAGES[@]}" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
             chown "$TARGET_USER:$TARGET_USER" "$REPORT_FILE"
-            warn "Some packages failed. See: $REPORT_FILE"
+            warn "Some packages failed. List saved to: $REPORT_FILE"
         fi
     fi
 else

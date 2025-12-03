@@ -146,7 +146,6 @@ select_flathub_mirror() {
         "TUNA (Tsinghua University)"
         "USTC (Univ of Sci & Tech of China)"
         "BFSU (Beijing Foreign Studies Univ)"
-        "Flathub Official (Global)"
     )
     
     local urls=(
@@ -154,7 +153,6 @@ select_flathub_mirror() {
         "https://mirror.tuna.tsinghua.edu.cn/flathub"
         "https://mirrors.ustc.edu.cn/flathub"
         "https://mirrors.bfsu.edu.cn/flathub"
-        "https://dl.flathub.org/repo/flathub.flatpakrepo"
     )
 
     # 2. 动态计算菜单宽度 (基于无颜色的纯文本)
