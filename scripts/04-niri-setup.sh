@@ -243,13 +243,32 @@ fi
 # 5. Dotfiles
 # ------------------------------------------------------------------------------
 section "Step 5/9" "Deploying Dotfiles"
-REPO_URL="https://github.com/SHORiN-KiWATA/ShorinArchExperience-ArchlinuxGuide.git"
+
+# Define URLs
+REPO_GITHUB="https://github.com/SHORiN-KiWATA/ShorinArchExperience-ArchlinuxGuide.git"
+REPO_GITEE="https://gitee.com/shorinkiwata/ShorinArchExperience-ArchlinuxGuide.git"
 TEMP_DIR="/tmp/shorin-repo"
+
+# Ensure clean start
 rm -rf "$TEMP_DIR"
 
-log "Cloning..."
-if ! exe runuser -u "$TARGET_USER" -- git clone "$REPO_URL" "$TEMP_DIR"; then
-    error "Clone failed."
+log "Cloning configuration repository..."
+
+# Attempt 1: GitHub
+if exe runuser -u "$TARGET_USER" -- git clone "$REPO_GITHUB" "$TEMP_DIR"; then
+    success "Cloned successfully (Source: GitHub)."
+else
+    warn "GitHub clone failed. Attempting fallback to Gitee..."
+    
+    # Clean partial files from failed attempt
+    rm -rf "$TEMP_DIR"
+    
+    # Attempt 2: Gitee
+    if exe runuser -u "$TARGET_USER" -- git clone "$REPO_GITEE" "$TEMP_DIR"; then
+        success "Cloned successfully (Source: Gitee)."
+    else
+        error "Clone failed from both GitHub and Gitee."
+    fi
 fi
 
 if [ -d "$TEMP_DIR/dotfiles" ]; then
