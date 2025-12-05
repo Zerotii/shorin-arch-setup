@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# 04-niri-setup.sh - Niri Desktop (Visual Enhanced & Logic Fix)
+# 04-niri-setup.sh - Niri Desktop (Visual Enhanced & Logic Refactored)
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,49 +12,6 @@ DEBUG=${DEBUG:-0}
 CN_MIRROR=${CN_MIRROR:-0}
 
 check_root
-
-# --- Helper: Local Fallback (Fixed: Multiple files & Dependencies) ---
-install_local_fallback() {
-    local pkg_name="$1"
-    local search_dir="$PARENT_DIR/compiled/$pkg_name"
-    if [ ! -d "$search_dir" ]; then return 1; fi
-
-    # 读取目录下所有包文件
-    mapfile -t pkg_files < <(find "$search_dir" -maxdepth 1 -name "*.pkg.tar.zst")
-
-    if [ ${#pkg_files[@]} -gt 0 ]; then
-        warn "Using local fallback for '$pkg_name' (Found ${#pkg_files[@]} files)..."
-        warn "Note: This uses cached binaries. If the app crashes, please rebuild from source."
-
-        # 1. 收集依赖
-        log "Resolving dependencies for local packages..."
-        local all_deps=""
-        for pkg_file in "${pkg_files[@]}"; do
-            local deps=$(tar -xOf "$pkg_file" .PKGINFO | grep -E '^depend' | cut -d '=' -f 2 | xargs)
-            if [ -n "$deps" ]; then all_deps="$all_deps $deps"; fi
-        done
-        
-        # 2. 安装依赖 (使用 -Syu 确保系统同步)
-        if [ -n "$all_deps" ]; then
-            local unique_deps=$(echo "$all_deps" | tr ' ' '\n' | sort -u | tr '\n' ' ')
-            # [UPDATE] Changed yay -S to yay -Syu
-            if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --asdeps $unique_deps; then
-                error "Failed to install dependencies for local package '$pkg_name'."
-                return 1
-            fi
-        fi
-
-        # 3. 批量安装
-        log "Installing local packages..."
-        if exe runuser -u "$TARGET_USER" -- yay -U --noconfirm "${pkg_files[@]}"; then
-            success "Installed from local."; return 0
-        else
-            error "Local install failed."; return 1
-        fi
-    else
-        return 1
-    fi
-}
 
 section "Phase 4" "Niri Desktop Environment"
 
@@ -165,75 +122,127 @@ echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDO_TEMP_FILE"
 chmod 440 "$SUDO_TEMP_FILE"
 
 # ------------------------------------------------------------------------------
-# 4. Dependencies (LOGIC REWRITE: Network First -> Local Fallback)
+# 4. Dependencies (LOGIC REWRITE: Batch First -> AUR Sequential -> Snapshot Recovery)
 # ------------------------------------------------------------------------------
 section "Step 4/9" "Dependencies"
 LIST_FILE="$PARENT_DIR/niri-applist.txt"
-FAILED_PACKAGES=()
+UNDO_SCRIPT="$PARENT_DIR/undochange.sh"
+
+# --- Critical Failure Handler ---
+critical_failure_handler() {
+    local failed_pkg="$1"
+    
+    echo ""
+    echo -e "\033[0;31m################################################################\033[0m"
+    echo -e "\033[0;31m#                                                              #\033[0m"
+    echo -e "\033[0;31m#   CRITICAL INSTALLATION FAILURE DETECTED                     #\033[0m"
+    echo -e "\033[0;31m#   Package: $failed_pkg                                       #\033[0m"
+    echo -e "\033[0;31m#                                                              #\033[0m"
+    echo -e "\033[0;31m#   Installation cannot proceed.                               #\033[0m"
+    echo -e "\033[0;31m#   Would you like to restore snapshot (undo changes)?         #\033[0m"
+    echo -e "\033[0;31m#                                                              #\033[0m"
+    echo -e "\033[0;31m################################################################\033[0m"
+    echo ""
+
+    while true; do
+        read -p "Execute System Recovery? (Y/N - Will wait indefinitely): " -r choice
+        case "$choice" in 
+            [yY][eE][sS]|[yY]) 
+                if [ -f "$UNDO_SCRIPT" ]; then
+                    warn "Executing recovery script: $UNDO_SCRIPT"
+                    bash "$UNDO_SCRIPT"
+                    exit 1
+                else
+                    error "Recovery script not found at: $UNDO_SCRIPT"
+                    exit 1
+                fi
+                ;;
+            *)
+                echo "Waiting for valid input (Y)..."
+                ;;
+        esac
+    done
+}
 
 if [ -f "$LIST_FILE" ]; then
     mapfile -t PACKAGE_ARRAY < <(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | tr -d '\r')
+    
     if [ ${#PACKAGE_ARRAY[@]} -gt 0 ]; then
-        BATCH_LIST=""
-        GIT_LIST=()
+        BATCH_LIST=()
+        AUR_LIST=()
+
+        # 1. Parse List & Separate
         for pkg in "${PACKAGE_ARRAY[@]}"; do
             [ "$pkg" == "imagemagic" ] && pkg="imagemagick"
-            if [[ "$pkg" == *"-git" || "$pkg" == "clipse-gui" ]]; then GIT_LIST+=("$pkg"); else BATCH_LIST+="$pkg "; fi
+
+            if [[ "$pkg" == "AUR:"* ]]; then
+                clean_pkg="${pkg#AUR:}"
+                AUR_LIST+=("$clean_pkg")
+            else
+                BATCH_LIST+=("$pkg")
+            fi
         done
 
-        # Phase 1: Batch Install (Repository Packages)
-        if [ -n "$BATCH_LIST" ]; then
-            log "Batch Install..."
-            # [UPDATE] Ensuring -Syu, Removed GOPROXY
-            if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
-                warn "Batch failed. Proceeding to individual install..."
+        # 2. Phase 1: Batch Install (Repo Packages)
+        if [ ${#BATCH_LIST[@]} -gt 0 ]; then
+            log "Phase 1: Batch Installing Repository Packages..."
+            # Try 1
+            if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "${BATCH_LIST[@]}"; then
+                warn "Batch install failed. Retrying once..."
+                # Retry 1
+                if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "${BATCH_LIST[@]}"; then
+                    critical_failure_handler "Batch Repository List"
+                else
+                    success "Batch install successful on retry."
+                fi
             else
-                success "Batch installed."
+                success "Batch install successful."
             fi
         fi
 
-        # Phase 2: Git/AUR Packages (Priority: Build from Source)
-        if [ ${#GIT_LIST[@]} -gt 0 ]; then
-            log "Git/AUR Install..."
-            for git_pkg in "${GIT_LIST[@]}"; do
-                log "Installing '$git_pkg' (Network Build)..."
+        # 3. Phase 2: Sequential Install (AUR Packages)
+        if [ ${#AUR_LIST[@]} -gt 0 ]; then
+            log "Phase 2: Installing AUR Packages (Sequential)..."
+            log "Hint: Use Ctrl+C to skip a specific package download step."
+
+            for aur_pkg in "${AUR_LIST[@]}"; do
+                log "Installing '$aur_pkg'..."
                 
-                # [UPDATE] Ensuring -Syu, Removed GOPROXY
-                if exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
-                    success "Installed $git_pkg (Built from source)."
+                # Try 1
+                runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$aur_pkg"
+                EXIT_CODE=$?
+
+                if [ $EXIT_CODE -eq 0 ]; then
+                    success "Installed $aur_pkg."
+                elif [ $EXIT_CODE -eq 130 ]; then
+                    warn "Skipped '$aur_pkg' by user request (Ctrl+C)."
+                    continue
                 else
-                    warn "Network build failed for '$git_pkg'."
+                    warn "Installation failed for '$aur_pkg'. Retrying once..."
                     
-                    # --- Fallback: Try Local Cache ---
-                    warn "Network failed. Attempting local fallback for '$git_pkg'..."
-                    if install_local_fallback "$git_pkg"; then
-                        warn "INSTALLED FROM LOCAL CACHE. If '$git_pkg' fails to launch, you must rebuild it manually."
+                    # Retry 1
+                    runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$aur_pkg"
+                    RETRY_CODE=$?
+
+                    if [ $RETRY_CODE -ne 0 ]; then
+                        if [ $RETRY_CODE -eq 130 ]; then
+                             warn "Skipped '$aur_pkg' on retry by user request (Ctrl+C)."
+                        else
+                             critical_failure_handler "$aur_pkg"
+                        fi
                     else
-                        error "Failed to install '$git_pkg' (Both Network and Local failed)."
-                        FAILED_PACKAGES+=("$git_pkg")
+                        success "Installed $aur_pkg on retry."
                     fi
                 fi
             done
         fi
         
-        # Recovery
+        # Recovery Check
         if ! command -v waybar &> /dev/null; then
             warn "Waybar missing. Installing stock..."
             exe pacman -Syu --noconfirm --needed waybar
         fi
 
-        if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
-            DOCS_DIR="$HOME_DIR/Documents"
-            REPORT_FILE="$DOCS_DIR/安装失败的软件.txt"
-            if [ ! -d "$DOCS_DIR" ]; then runuser -u "$TARGET_USER" -- mkdir -p "$DOCS_DIR"; fi
-            
-            echo "--- Installation Failed Report $(date) ---" >> "$REPORT_FILE"
-            printf "%s\n" "${FAILED_PACKAGES[@]}" >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-            
-            chown "$TARGET_USER:$TARGET_USER" "$REPORT_FILE"
-            warn "Some packages failed. List saved to: $REPORT_FILE"
-        fi
     fi
 else
     warn "niri-applist.txt not found."
@@ -298,15 +307,13 @@ if [ -d "$TEMP_DIR/dotfiles" ]; then
     exe runuser -u "$TARGET_USER" -- ln -sf "$THEME_SRC/gtk.css" "$GTK4_CONF/gtk.css"
     exe runuser -u "$TARGET_USER" -- ln -sf "$THEME_SRC/assets" "$GTK4_CONF/assets"
 
-    # --- [NEW] Apply Flatpak GTK Theming Overrides ---
+    # --- Apply Flatpak GTK Theming Overrides ---
     if command -v flatpak &>/dev/null; then
         log "Applying Flatpak GTK theme overrides..."
-        # 注意: 这里使用 "$HOME_DIR" 替代 "~"，因为脚本以 root 运行，~ 会展开为 /root
         exe runuser -u "$TARGET_USER" -- flatpak override --user --filesystem="$HOME_DIR/.themes"
         exe runuser -u "$TARGET_USER" -- flatpak override --user --filesystem=xdg-config/gtk-4.0
         exe runuser -u "$TARGET_USER" -- flatpak override --user --env=GTK_THEME=adw-gtk3-dark
     fi
-    # ----------------------------------------------------------
 
     success "Applied."
     
@@ -356,7 +363,6 @@ success "Tools configured."
 # ------------------------------------------------------------------------------
 section "Step 9/9" "Cleanup"
 rm -f "$SUDO_TEMP_FILE"
-# [REMOVED] GOPROXY sed command
 success "Done."
 
 # ------------------------------------------------------------------------------

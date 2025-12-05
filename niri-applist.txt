@@ -1,5 +1,4 @@
 firefox
-xwayland-satellite-git
 breeze
 breeze-gtk
 breeze-icons
@@ -11,9 +10,6 @@ eza
 swaylock-effects
 swayidle
 wl-clipboard
-clipse-bin
-clipse-gui
-satty-git
 swww
 waypaper
 waybar
@@ -23,11 +19,6 @@ slurp
 swappy
 wf-recorder
 hyprpicker
-waybar-niri-taskbar-git
-waybar-module-pacman-updates-git
-blueberry
-wlogout
-matugen
 thefuck
 zoxide
 starship
@@ -38,7 +29,15 @@ imagemagick
 imv
 mission-center
 neovim
-python-pywalfox
 qt6ct
 qt5ct
 nwg-look
+AUR:xwayland-satellite-git
+AUR:waybar-niri-taskbar-git
+AUR:waybar-module-pacman-updates-git
+AUR:wlogout
+AUR:matugen
+AUR:clipse-bin
+AUR:clipse-gui
+AUR:satty-git
+AUR:python-pywalfox
