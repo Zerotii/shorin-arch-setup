@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# 04-niri-setup.sh - Niri Desktop (Visual Enhanced & Logic Fix)
+# 04-niri-setup.sh - Niri Desktop (Visual Enhanced & Interactive Rollback)
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,65 +11,95 @@ source "$SCRIPT_DIR/00-utils.sh"
 DEBUG=${DEBUG:-0}
 CN_MIRROR=${CN_MIRROR:-0}
 
+# 定义回滚脚本位置
+UNDO_SCRIPT="$SCRIPT_DIR/niri-undochange.sh"
+
 check_root
-
-# --- Helper: Local Fallback (Fixed: Multiple files & Dependencies) ---
-install_local_fallback() {
-    local pkg_name="$1"
-    local search_dir="$PARENT_DIR/compiled/$pkg_name"
-    if [ ! -d "$search_dir" ]; then return 1; fi
-
-    # 读取目录下所有包文件
-    mapfile -t pkg_files < <(find "$search_dir" -maxdepth 1 -name "*.pkg.tar.zst")
-
-    if [ ${#pkg_files[@]} -gt 0 ]; then
-        warn "Using local fallback for '$pkg_name' (Found ${#pkg_files[@]} files)..."
-        warn "Note: This uses cached binaries. If the app crashes, please rebuild from source."
-
-        # 1. 收集依赖
-        log "Resolving dependencies for local packages..."
-        local all_deps=""
-        for pkg_file in "${pkg_files[@]}"; do
-            local deps=$(tar -xOf "$pkg_file" .PKGINFO | grep -E '^depend' | cut -d '=' -f 2 | xargs)
-            if [ -n "$deps" ]; then all_deps="$all_deps $deps"; fi
-        done
-        
-        # 2. 安装依赖 (使用 -Syu 确保系统同步)
-        if [ -n "$all_deps" ]; then
-            local unique_deps=$(echo "$all_deps" | tr ' ' '\n' | sort -u | tr '\n' ' ')
-            # [UPDATE] Changed yay -S to yay -Syu
-            if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --asdeps $unique_deps; then
-                error "Failed to install dependencies for local package '$pkg_name'."
-                return 1
-            fi
-        fi
-
-        # 3. 批量安装
-        log "Installing local packages..."
-        if exe runuser -u "$TARGET_USER" -- yay -U --noconfirm "${pkg_files[@]}"; then
-            success "Installed from local."; return 0
-        else
-            error "Local install failed."; return 1
-        fi
-    else
-        return 1
-    fi
-}
 
 section "Phase 4" "Niri Desktop Environment"
 
-# ------------------------------------------------------------------------------
-# 0. Identify Target User
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# [NEW] STEP 0: Safety Checkpoint & Critical Error Handler
+# ==============================================================================
+
+# 1. Create Checkpoint
+create_checkpoint() {
+    local marker="Before Niri Setup"
+    
+    if snapper -c root list | grep -q "$marker"; then
+        log "Checkpoint '$marker' already exists. Ready to proceed."
+    else
+        log "Creating safety checkpoint: '$marker'..."
+        snapper -c root create -d "$marker"
+        if snapper -c home list &>/dev/null; then
+            snapper -c home create -d "$marker"
+        fi
+        success "Checkpoint created."
+    fi
+}
+
+create_checkpoint
+
+# 2. Critical Failure Handler (The "Big Red Box" Interactive Logic)
+critical_failure_handler() {
+    local failed_reason="$1"
+    
+    # Disable trap to prevent loops during input
+    trap - ERR
+
+    echo ""
+    echo -e "\033[0;31m################################################################\033[0m"
+    echo -e "\033[0;31m#                                                              #\033[0m"
+    echo -e "\033[0;31m#   CRITICAL INSTALLATION FAILURE DETECTED                     #\033[0m"
+    echo -e "\033[0;31m#   Reason: $failed_reason                                     #\033[0m"
+    echo -e "\033[0;31m#   Status: System might be in an inconsistent state.          #\033[0m"
+    echo -e "\033[0;31m#                                                              #\033[0m"
+    echo -e "\033[0;31m#   Would you like to restore snapshot (undo changes)?         #\033[0m"
+    echo -e "\033[0;31m################################################################\033[0m"
+    echo ""
+
+    while true; do
+        # No default option (-p prompt only)
+        read -p "Execute System Recovery? [y/n]: " -r choice
+        case "$choice" in 
+            [yY][eE][sS]|[yY]) 
+                if [ -f "$UNDO_SCRIPT" ]; then
+                    warn "Executing recovery script: $UNDO_SCRIPT"
+                    bash "$UNDO_SCRIPT"
+                    exit 1 # The undo script handles reboot, but just in case
+                else
+                    error "Recovery script not found at: $UNDO_SCRIPT"
+                    error "You are on your own. Good luck."
+                    exit 1
+                fi
+                ;;
+            [nN][oO]|[nN])
+                warn "User chose NOT to recover. System might be in a broken state."
+                error "Installation aborted."
+                exit 1
+                ;;
+            *)
+                echo -e "\033[1;33mInvalid input. Please enter 'y' to recover or 'n' to abort.\033[0m"
+                ;;
+        esac
+    done
+}
+
+# 3. Enable Trap for Unexpected Errors
+# If the script crashes (syntax error, command failed outside of our manual checks),
+# it calls the handler with line number.
+trap 'critical_failure_handler "Script Error at Line $LINENO"' ERR
+
+
+# ==============================================================================
+# STEP 1: Identify User & DM Check
+# ==============================================================================
 log "Identifying user..."
 DETECTED_USER=$(awk -F: '$3 == 1000 {print $1}' /etc/passwd)
 if [ -n "$DETECTED_USER" ]; then TARGET_USER="$DETECTED_USER"; else read -p "Target user: " TARGET_USER; fi
 HOME_DIR="/home/$TARGET_USER"
 info_kv "Target" "$TARGET_USER"
 
-# ------------------------------------------------------------------------------
-# [SAFETY CHECK] DM Detection
-# ------------------------------------------------------------------------------
 log "Checking Display Managers..."
 KNOWN_DMS=("gdm" "sddm" "lightdm" "lxdm" "slim" "xorg-xdm" "ly" "greetd")
 SKIP_AUTOLOGIN=false
@@ -84,15 +114,16 @@ if [ -n "$DM_FOUND" ]; then
     SKIP_AUTOLOGIN=true
 else
     info_kv "DM Check" "None"
-    read -t 20 -p "$(echo -e "   ${H_CYAN}Enable TTY auto-login? [Y/n] (Default Y in 20s): ${NC}")" choice
+    # Using || true to ensure read timeout doesn't trigger TRAP ERR
+    read -t 20 -p "$(echo -e "   ${H_CYAN}Enable TTY auto-login? [Y/n] (Default Y in 20s): ${NC}")" choice || true
     if [ $? -ne 0 ]; then echo ""; fi
     choice=${choice:-Y}
     if [[ ! "$choice" =~ ^[Yy]$ ]]; then SKIP_AUTOLOGIN=true; else SKIP_AUTOLOGIN=false; fi
 fi
 
-# ------------------------------------------------------------------------------
-# 1. Install Core
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 2: Core Components
+# ==============================================================================
 section "Step 1/9" "Core Components"
 PKGS="niri xdg-desktop-portal-gnome fuzzel kitty libnotify mako polkit-gnome"
 exe pacman -Syu --noconfirm --needed $PKGS
@@ -109,9 +140,9 @@ exe chmod 755 "$FIREFOX_POLICY_DIR"
 exe chmod 644 "$FIREFOX_POLICY_DIR/policies.json"
 success "Firefox policy applied."
 
-# ------------------------------------------------------------------------------
-# 2. File Manager
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 3: File Manager
+# ==============================================================================
 section "Step 2/9" "File Manager"
 exe pacman -Syu --noconfirm --needed ffmpegthumbnailer gvfs-smb nautilus-open-any-terminal file-roller gnome-keyring gst-plugins-base gst-plugins-good gst-libav nautilus
 if [ ! -f /usr/bin/gnome-terminal ] || [ -L /usr/bin/gnome-terminal ]; then exe ln -sf /usr/bin/kitty /usr/bin/gnome-terminal; fi
@@ -122,15 +153,14 @@ if [ -f "$DESKTOP_FILE" ]; then
     ENV_VARS="env GTK_IM_MODULE=fcitx"
     if [ "$GPU_COUNT" -gt 1 ] && [ "$HAS_NVIDIA" -gt 0 ]; then ENV_VARS="env GSK_RENDERER=gl GTK_IM_MODULE=fcitx"; fi
     
-    # Check if the line is already modified to prevent duplicate entries
     if ! grep -q "^Exec=$ENV_VARS" "$DESKTOP_FILE"; then
         exe sed -i "s|^Exec=|Exec=$ENV_VARS |" "$DESKTOP_FILE"
     fi
 fi
 
-# ------------------------------------------------------------------------------
-# 3. Network Optimization
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 4: Network Optimization
+# ==============================================================================
 section "Step 3/9" "Network Optimization"
 exe pacman -Syu --noconfirm --needed flatpak gnome-software
 exe flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -151,9 +181,7 @@ fi
 
 if [ "$IS_CN_ENV" = true ]; then
     log "Enabling China Optimizations..."
-    
     select_flathub_mirror
-    
     success "Optimizations Enabled."
 else
     log "Using Global Sources."
@@ -164,103 +192,154 @@ SUDO_TEMP_FILE="/etc/sudoers.d/99_shorin_installer_temp"
 echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDO_TEMP_FILE"
 chmod 440 "$SUDO_TEMP_FILE"
 
-# ------------------------------------------------------------------------------
-# 4. Dependencies (LOGIC REWRITE: Network First -> Local Fallback)
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 5: Dependencies (Interactive Recovery)
+# ==============================================================================
 section "Step 4/9" "Dependencies"
 LIST_FILE="$PARENT_DIR/niri-applist.txt"
-FAILED_PACKAGES=()
+
+# Verification Function
+verify_installation() {
+    local pkg="$1"
+    if pacman -Q "$pkg" &>/dev/null; then return 0; else return 1; fi
+}
 
 if [ -f "$LIST_FILE" ]; then
     mapfile -t PACKAGE_ARRAY < <(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | tr -d '\r')
+    
     if [ ${#PACKAGE_ARRAY[@]} -gt 0 ]; then
-        BATCH_LIST=""
-        GIT_LIST=()
+        BATCH_LIST=()
+        AUR_LIST=()
+
+        # 1. Parse List & Separate
         for pkg in "${PACKAGE_ARRAY[@]}"; do
             [ "$pkg" == "imagemagic" ] && pkg="imagemagick"
-            if [[ "$pkg" == *"-git" || "$pkg" == "clipse-gui" ]]; then GIT_LIST+=("$pkg"); else BATCH_LIST+="$pkg "; fi
+            if [[ "$pkg" == "AUR:"* ]]; then
+                clean_pkg="${pkg#AUR:}"
+                AUR_LIST+=("$clean_pkg")
+            else
+                BATCH_LIST+=("$pkg")
+            fi
         done
 
-        # Phase 1: Batch Install (Repository Packages)
-        if [ -n "$BATCH_LIST" ]; then
-            log "Batch Install..."
-            # [UPDATE] Ensuring -Syu, Removed GOPROXY
-            if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
-                warn "Batch failed. Proceeding to individual install..."
-            else
-                success "Batch installed."
-            fi
-        fi
-
-        # Phase 2: Git/AUR Packages (Priority: Build from Source)
-        if [ ${#GIT_LIST[@]} -gt 0 ]; then
-            log "Git/AUR Install..."
-            for git_pkg in "${GIT_LIST[@]}"; do
-                log "Installing '$git_pkg' (Network Build)..."
-                
-                # [UPDATE] Ensuring -Syu, Removed GOPROXY
-                if exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
-                    success "Installed $git_pkg (Built from source)."
-                else
-                    warn "Network build failed for '$git_pkg'."
+        # 2. Phase 1: Batch Install (Repo Packages)
+        if [ ${#BATCH_LIST[@]} -gt 0 ]; then
+            log "Phase 1: Batch Installing Repository Packages..."
+            
+            # Using || true ensures that if yay returns non-zero, TRAP ERR isn't triggered immediately,
+            # allowing us to do our own verification logic below.
+            exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "${BATCH_LIST[@]}" || true
+            
+            log "Verifying batch installation..."
+            for pkg in "${BATCH_LIST[@]}"; do
+                if ! verify_installation "$pkg"; then
+                    warn "Verification failed for '$pkg'. Retrying individually..."
+                    # Retry
+                    exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed "$pkg" || true
                     
-                    # --- Fallback: Try Local Cache ---
-                    warn "Network failed. Attempting local fallback for '$git_pkg'..."
-                    if install_local_fallback "$git_pkg"; then
-                        warn "INSTALLED FROM LOCAL CACHE. If '$git_pkg' fails to launch, you must rebuild it manually."
+                    # Final Check
+                    if ! verify_installation "$pkg"; then
+                        # Trigger the Big Red Box
+                        critical_failure_handler "Failed to install '$pkg' (Repo) after retry."
                     else
-                        error "Failed to install '$git_pkg' (Both Network and Local failed)."
-                        FAILED_PACKAGES+=("$git_pkg")
+                        success "Verified: $pkg"
                     fi
                 fi
             done
+            success "Batch phase verification complete."
         fi
-        
-        # Recovery
+
+        # 3. Phase 2: Sequential Install (AUR Packages)
+        if [ ${#AUR_LIST[@]} -gt 0 ]; then
+            log "Phase 2: Installing AUR Packages (Sequential)..."
+            log "Hint: Use Ctrl+C to skip a specific package download step."
+
+            for aur_pkg in "${AUR_LIST[@]}"; do
+                log "Installing '$aur_pkg'..."
+                
+                # Try 1
+                runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$aur_pkg" || true
+                EXIT_CODE=$?
+
+                # Handle Ctrl+C skip (130) manually
+                if [ $EXIT_CODE -eq 130 ]; then
+                    warn "Skipped '$aur_pkg' by user request (Ctrl+C)."
+                    continue
+                elif [ $EXIT_CODE -ne 0 ]; then
+                    warn "Yay exited with error code $EXIT_CODE for '$aur_pkg'. Will try to verify."
+                fi
+
+                # Verification
+                if ! verify_installation "$aur_pkg"; then
+                    warn "Verification failed for '$aur_pkg'. Retrying once..."
+                    
+                    # Retry
+                    runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$aur_pkg" || true
+                    RETRY_CODE=$?
+
+                    if [ $RETRY_CODE -eq 130 ]; then
+                         warn "Skipped '$aur_pkg' on retry by user request (Ctrl+C)."
+                         continue
+                    fi
+
+                    # Final Check
+                    if ! verify_installation "$aur_pkg"; then
+                        # Trigger the Big Red Box
+                        critical_failure_handler "Failed to install '$aur_pkg' (AUR) after retry."
+                    else
+                         success "Verified: $aur_pkg"
+                    fi
+                else
+                    success "Verified: $aur_pkg"
+                fi
+            done
+        fi
+    
+        # Recovery Check
         if ! command -v waybar &> /dev/null; then
             warn "Waybar missing. Installing stock..."
             exe pacman -Syu --noconfirm --needed waybar
         fi
 
-        if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
-            DOCS_DIR="$HOME_DIR/Documents"
-            REPORT_FILE="$DOCS_DIR/安装失败的软件.txt"
-            if [ ! -d "$DOCS_DIR" ]; then runuser -u "$TARGET_USER" -- mkdir -p "$DOCS_DIR"; fi
-            
-            echo "--- Installation Failed Report $(date) ---" >> "$REPORT_FILE"
-            printf "%s\n" "${FAILED_PACKAGES[@]}" >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-            
-            chown "$TARGET_USER:$TARGET_USER" "$REPORT_FILE"
-            warn "Some packages failed. List saved to: $REPORT_FILE"
-        fi
     fi
 else
     warn "niri-applist.txt not found."
 fi
 
-# ------------------------------------------------------------------------------
-# 5. Dotfiles
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 6: Dotfiles
+# ==============================================================================
 section "Step 5/9" "Deploying Dotfiles"
-REPO_URL="https://github.com/SHORiN-KiWATA/ShorinArchExperience-ArchlinuxGuide.git"
-TEMP_DIR="/tmp/shorin-repo"
-rm -rf "$TEMP_DIR"
 
-log "Cloning..."
-if ! exe runuser -u "$TARGET_USER" -- git clone "$REPO_URL" "$TEMP_DIR"; then
-    error "Clone failed."
+REPO_GITHUB="https://github.com/SHORiN-KiWATA/ShorinArchExperience-ArchlinuxGuide.git"
+REPO_GITEE="https://gitee.com/shorinkiwata/ShorinArchExperience-ArchlinuxGuide.git"
+TEMP_DIR="/tmp/shorin-repo"
+
+rm -rf "$TEMP_DIR"
+log "Cloning configuration repository..."
+
+# Attempt 1: GitHub
+if runuser -u "$TARGET_USER" -- git clone "$REPO_GITHUB" "$TEMP_DIR"; then
+    success "Cloned successfully (Source: GitHub)."
+else
+    warn "GitHub clone failed. Attempting fallback to Gitee..."
+    rm -rf "$TEMP_DIR"
+    
+    # Attempt 2: Gitee
+    if runuser -u "$TARGET_USER" -- git clone "$REPO_GITEE" "$TEMP_DIR"; then
+        success "Cloned successfully (Source: Gitee)."
+    else
+        error "Clone failed from both GitHub and Gitee."
+        # Clone failure triggers the handler
+        critical_failure_handler "Failed to clone dotfiles from GitHub and Gitee."
+    fi
 fi
 
 if [ -d "$TEMP_DIR/dotfiles" ]; then
-    # --- Check UID 1000 and remove bookmarks if not shorin ---
     UID1000_USER=$(id -nu 1000 2>/dev/null)
-    
     if [ "$UID1000_USER" != "shorin" ]; then
-        log "UID 1000 user ($UID1000_USER) is not shorin. Removing gtk bookmarks..."
         rm -f "$TEMP_DIR/dotfiles/.config/gtk-3.0/bookmarks"
     fi
-    # ---------------------------------------------------------
 
     BACKUP_NAME="config_backup_$(date +%s).tar.gz"
     log "Backing up..."
@@ -269,7 +348,6 @@ if [ -d "$TEMP_DIR/dotfiles" ]; then
     log "Applying..."
     exe runuser -u "$TARGET_USER" -- cp -rf "$TEMP_DIR/dotfiles/." "$HOME_DIR/"
 
-    # --- Re-link GTK 4.0 Assets for dynamic user path ---
     log "Fixing GTK 4.0 symlinks..."
     GTK4_CONF="$HOME_DIR/.config/gtk-4.0"
     THEME_SRC="$HOME_DIR/.themes/adw-gtk3-dark/gtk-4.0"
@@ -279,22 +357,18 @@ if [ -d "$TEMP_DIR/dotfiles" ]; then
     exe runuser -u "$TARGET_USER" -- ln -sf "$THEME_SRC/gtk.css" "$GTK4_CONF/gtk.css"
     exe runuser -u "$TARGET_USER" -- ln -sf "$THEME_SRC/assets" "$GTK4_CONF/assets"
 
-    # --- [NEW] Apply Flatpak GTK Theming Overrides ---
     if command -v flatpak &>/dev/null; then
         log "Applying Flatpak GTK theme overrides..."
-        # 注意: 这里使用 "$HOME_DIR" 替代 "~"，因为脚本以 root 运行，~ 会展开为 /root
         exe runuser -u "$TARGET_USER" -- flatpak override --user --filesystem="$HOME_DIR/.themes"
         exe runuser -u "$TARGET_USER" -- flatpak override --user --filesystem=xdg-config/gtk-4.0
         exe runuser -u "$TARGET_USER" -- flatpak override --user --env=GTK_THEME=adw-gtk3-dark
     fi
-    # ----------------------------------------------------------
 
     success "Applied."
     
     if [ "$TARGET_USER" != "shorin" ]; then
         log "Cleaning output.kdl..."
         exe runuser -u "$TARGET_USER" -- truncate -s 0 "$HOME_DIR/.config/niri/output.kdl"
-        # Clean excluded
         EXCLUDE_FILE="$PARENT_DIR/exclude-dotfiles.txt"
         if [ -f "$EXCLUDE_FILE" ]; then
             mapfile -t EXCLUDES < <(grep -vE "^\s*#|^\s*$" "$EXCLUDE_FILE" | tr -d '\r')
@@ -310,9 +384,9 @@ else
     warn "Dotfiles missing."
 fi
 
-# ------------------------------------------------------------------------------
-# 6. Wallpapers
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 7: Wallpapers
+# ==============================================================================
 section "Step 6/9" "Wallpapers"
 WALL_DEST="$HOME_DIR/Pictures/Wallpapers"
 if [ -d "$TEMP_DIR/wallpapers" ]; then
@@ -322,27 +396,26 @@ if [ -d "$TEMP_DIR/wallpapers" ]; then
 fi
 rm -rf "$TEMP_DIR"
 
-# ------------------------------------------------------------------------------
-# 7. Hardware Tools
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 8: Hardware Tools
+# ==============================================================================
 section "Step 7/9" "Hardware"
-exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed ddcutil-service
+# exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed ddcutil-service
 gpasswd -a "$TARGET_USER" i2c
-exe pacman -Syu --noconfirm --needed swayosd
+# exe pacman -Syu --noconfirm --needed swayosd
 systemctl enable --now swayosd-libinput-backend.service > /dev/null 2>&1
 success "Tools configured."
 
-# ------------------------------------------------------------------------------
-# Cleanup
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 9: Cleanup
+# ==============================================================================
 section "Step 9/9" "Cleanup"
 rm -f "$SUDO_TEMP_FILE"
-# [REMOVED] GOPROXY sed command
 success "Done."
 
-# ------------------------------------------------------------------------------
-# 10. Auto-Login
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# STEP 10: Auto-Login
+# ==============================================================================
 section "Final" "Boot Config"
 USER_SYSTEMD_DIR="$HOME_DIR/.config/systemd/user"
 WANTS_DIR="$USER_SYSTEMD_DIR/default.target.wants"
@@ -383,5 +456,12 @@ EOT
     exe chown -R "$TARGET_USER" "$HOME_DIR/.config/systemd"
     success "Enabled."
 fi
+
+# ==============================================================================
+# STEP 11: Completion
+# ==============================================================================
+
+# Disable trap to avoid false positives during exit
+trap - ERR
 
 log "Module 04 completed."

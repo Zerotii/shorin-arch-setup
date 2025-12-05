@@ -107,10 +107,16 @@ section "Step 3/3" "User Directories"
 exe pacman -Syu --noconfirm --needed xdg-user-dirs
 
 log "Generating directories (Downloads, Documents...)..."
-if exe runuser -u "$MY_USERNAME" -- xdg-user-dirs-update; then
-    success "Directories created."
+
+# 1. 获取目标用户的真实 Home 目录路径
+REAL_HOME=$(getent passwd "$MY_USERNAME" | cut -d: -f6)
+
+# 2. 强制指定 HOME 环境变量运行更新命令
+# 注意：这里加了 --force 确保即使配置文件已存在也能强制刷新目录结构
+if exe runuser -u "$MY_USERNAME" -- env HOME="$REAL_HOME" xdg-user-dirs-update --force; then
+    success "Directories created in $REAL_HOME."
 else
-    warn "Failed to generate directories (Session might be inactive)."
+    warn "Failed to generate directories."
 fi
 
 log "Module 03 completed."

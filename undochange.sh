@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==============================================================================
-# undochange.sh - Emergency System Rollback Tool
+# undochange.sh - Emergency System Rollback Tool (Silent Mode)
 # ==============================================================================
 # Usage: sudo ./undochange.sh
-# Description: Reverts system to the state "Before Shorin Setup"
+# Description: Reverts system to the state "Before Shorin Setup" IMMEDIATELY
 # ==============================================================================
 
 RED='\033[0;31m'
@@ -46,31 +46,19 @@ if snapper list-configs | grep -q "^home "; then
     fi
 fi
 
-# 4. Confirm
-echo ""
-echo -e "${RED}WARNING: This will revert ALL changes made to the system since the snapshot.${NC}"
-echo -e "${RED}Any files created or modified after the snapshot will be LOST.${NC}"
-echo ""
-read -p "Are you sure you want to ROLLBACK and REBOOT immediately? [y/N] " choice
+# 4. Execute Rollback (No Confirmation)
 
-if [[ "$choice" =~ ^[Yy]$ ]]; then
-    echo ""
-    
-    # Rollback Root
-    echo -e "${YELLOW}Reverting / (Root)...${NC}"
-    # undochange ID..0 means: Change from ID to Current(0) state (Revert)
-    snapper -c root undochange $ROOT_ID..0
-    
-    # Rollback Home
-    if [ -n "$HOME_ID" ]; then
-        echo -e "${YELLOW}Reverting /home...${NC}"
-        snapper -c home undochange $HOME_ID..0
-    fi
-    
-    echo -e "${GREEN}Rollback complete. Rebooting...${NC}"
-    sleep 2
-    reboot
-else
-    echo "Operation cancelled."
-    exit 0
+# Rollback Root
+echo -e "${YELLOW}Reverting / (Root)...${NC}"
+# undochange ID..0 means: Change from ID to Current(0) state (Revert)
+snapper -c root undochange $ROOT_ID..0
+
+# Rollback Home
+if [ -n "$HOME_ID" ]; then
+    echo -e "${YELLOW}Reverting /home...${NC}"
+    snapper -c home undochange $HOME_ID..0
 fi
+
+echo -e "${GREEN}Rollback complete. Rebooting...${NC}"
+sleep 2
+reboot

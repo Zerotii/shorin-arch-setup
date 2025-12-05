@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Shorin Arch Setup - Main Installer (v4.0)
+# Shorin Arch Setup - Main Installer (v4.5)
 # ==============================================================================
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,8 +18,6 @@ fi
 
 # --- Global Cleanup on Exit ---
 cleanup() {
-    # This function is called on EXIT.
-    # Add any other temporary files here if needed.
     rm -f "/tmp/shorin_install_user"
 }
 trap cleanup EXIT
@@ -79,7 +77,7 @@ show_banner() {
         2) banner3 ;;
     esac
     echo -e "${NC}"
-    echo -e "${DIM}   :: Arch Linux Automation Protocol :: v4.0 ::${NC}"
+    echo -e "${DIM}   :: Arch Linux Automation Protocol :: v4.5 ::${NC}"
     echo ""
 }
 
@@ -136,7 +134,7 @@ sys_dashboard() {
     
     if [ -f "$STATE_FILE" ]; then
         done_count=$(wc -l < "$STATE_FILE")
-        echo -e "${H_BLUE}║${NC} ${BOLD}Progress${NC} : Resuming ($done_count modules done)"
+        echo -e "${H_BLUE}║${NC} ${BOLD}Progress${NC} : Resuming ($done_count steps recorded)"
     fi
     echo -e "${H_BLUE}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -151,7 +149,7 @@ sys_dashboard
 
 # Dynamic Module List
 BASE_MODULES=(
-    "00-btrfs-init.sh"  # Critical: Must be first to create snapshot
+    "00-btrfs-init.sh"
     "01-base.sh"
     "02-musthave.sh"
     "03-user.sh"
@@ -174,54 +172,67 @@ CURRENT_STEP=0
 log "Initializing installer sequence..."
 sleep 0.5
 
-# --- [NEW] Reflector Mirror Update ---
+# --- Reflector Mirror Update (State Aware) ---
 section "Pre-Flight" "Mirrorlist Optimization"
-log "Checking Reflector..."
-exe pacman -Sy --noconfirm --needed reflector
 
-CURRENT_TZ=$(readlink -f /etc/localtime)
-REFLECTOR_ARGS="-a 24 -f 10 --sort score --save /etc/pacman.d/mirrorlist --verbose"
+# [MODIFIED] Check if already done
+if grep -q "^REFLECTOR_DONE$" "$STATE_FILE"; then
+    echo -e "   ${H_GREEN}✔${NC} Mirrorlist previously optimized."
+    echo -e "   ${DIM}   Skipping Reflector steps (Resume Mode)...${NC}"
+else
+    # --- Start Reflector Logic ---
+    log "Checking Reflector..."
+    exe pacman -Sy --noconfirm --needed reflector
 
-if [[ "$CURRENT_TZ" == *"Shanghai"* ]]; then
-    echo ""
-    echo -e "${H_YELLOW}╔══════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${H_YELLOW}║  DETECTED TIMEZONE: Asia/Shanghai                                ║${NC}"
-    echo -e "${H_YELLOW}║  Refreshing mirrors in China can be slow.                        ║${NC}"
-    echo -e "${H_YELLOW}║  Do you want to force refresh mirrors with Reflector?            ║${NC}"
-    echo -e "${H_YELLOW}╚══════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    
-    read -t 60 -p "$(echo -e "   ${H_CYAN}Run Reflector? [y/N] (Default No in 60s): ${NC}")" choice
-    if [ $? -ne 0 ]; then echo ""; fi
-    choice=${choice:-N}
-    
-    if [[ "$choice" =~ ^[Yy]$ ]]; then
-        log "Running Reflector for China..."
-        if exe reflector $REFLECTOR_ARGS -c cn; then
-            success "Mirrors updated."
+    CURRENT_TZ=$(readlink -f /etc/localtime)
+    REFLECTOR_ARGS="-a 24 -f 10 --sort score --save /etc/pacman.d/mirrorlist --verbose"
+
+    if [[ "$CURRENT_TZ" == *"Shanghai"* ]]; then
+        echo ""
+        echo -e "${H_YELLOW}╔══════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${H_YELLOW}║  DETECTED TIMEZONE: Asia/Shanghai                                ║${NC}"
+        echo -e "${H_YELLOW}║  Refreshing mirrors in China can be slow.                        ║${NC}"
+        echo -e "${H_YELLOW}║  Do you want to force refresh mirrors with Reflector?            ║${NC}"
+        echo -e "${H_YELLOW}╚══════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        
+        read -t 60 -p "$(echo -e "   ${H_CYAN}Run Reflector? [y/N] (Default No in 60s): ${NC}")" choice
+        if [ $? -ne 0 ]; then echo ""; fi
+        choice=${choice:-N}
+        
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            log "Running Reflector for China..."
+            if exe reflector $REFLECTOR_ARGS -c China; then
+                success "Mirrors updated."
+            else
+                warn "Reflector failed. Continuing with existing mirrors."
+            fi
         else
-            warn "Reflector failed. Continuing with existing mirrors."
+            log "Skipping mirror refresh."
         fi
     else
-        log "Skipping mirror refresh."
-    fi
-else
-    log "Detecting location for optimization..."
-    COUNTRY_CODE=$(curl -s --max-time 2 https://ipinfo.io/country)
-    
-    if [ -n "$COUNTRY_CODE" ]; then
-        info_kv "Country" "$COUNTRY_CODE" "(Auto-detected)"
-        log "Running Reflector for $COUNTRY_CODE..."
-        if ! exe reflector $REFLECTOR_ARGS -c "$COUNTRY_CODE"; then
-            warn "Country specific refresh failed. Trying global speed test..."
+        log "Detecting location for optimization..."
+        COUNTRY_CODE=$(curl -s --max-time 2 https://ipinfo.io/country)
+        
+        if [ -n "$COUNTRY_CODE" ]; then
+            info_kv "Country" "$COUNTRY_CODE" "(Auto-detected)"
+            log "Running Reflector for $COUNTRY_CODE..."
+            if ! exe reflector $REFLECTOR_ARGS -c "$COUNTRY_CODE"; then
+                warn "Country specific refresh failed. Trying global speed test..."
+                exe reflector $REFLECTOR_ARGS
+            fi
+        else
+            warn "Could not detect country. Running global speed test..."
             exe reflector $REFLECTOR_ARGS
         fi
-    else
-        warn "Could not detect country. Running global speed test..."
-        exe reflector $REFLECTOR_ARGS
+        success "Mirrorlist optimized."
     fi
-    success "Mirrorlist optimized."
+    # --- End Reflector Logic ---
+
+    # [MODIFIED] Record success so we don't ask again
+    echo "REFLECTOR_DONE" >> "$STATE_FILE"
 fi
+
 
 # --- Global Update ---
 section "Pre-Flight" "System Synchronization"
@@ -244,48 +255,107 @@ for module in "${MODULES[@]}"; do
         continue
     fi
 
-    section "Module ${CURRENT_STEP}/${TOTAL_STEPS}" "$module"
-
+    # Checkpoint Logic: Auto-skip if in state file
     if grep -q "^${module}$" "$STATE_FILE"; then
-        echo -e "   ${H_GREEN}✔${NC} Module previously completed."
-        read -p "$(echo -e "   ${H_YELLOW}Skip this module? [Y/n] ${NC}")" skip_choice
-        skip_choice=${skip_choice:-Y}
-        if [[ "$skip_choice" =~ ^[Yy]$ ]]; then log "Skipping..."; continue; else log "Force re-running..."; sed -i "/^${module}$/d" "$STATE_FILE"; fi
+        echo -e "   ${H_GREEN}✔${NC} Module ${BOLD}${module}${NC} already completed."
+        echo -e "   ${DIM}   Skipping... (Delete .install_progress to force run)${NC}"
+        continue
     fi
+
+    section "Module ${CURRENT_STEP}/${TOTAL_STEPS}" "$module"
 
     bash "$script_path"
     exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
+        # Only record success
         echo "$module" >> "$STATE_FILE"
+        success "Module $module completed."
     elif [ $exit_code -eq 130 ]; then
         echo ""
         warn "Script interrupted by user (Ctrl+C)."
         log "Exiting without rollback. You can resume later."
         exit 130
     else
+        # Failure logic: do NOT write to STATE_FILE
         write_log "FATAL" "Module $module failed with exit code $exit_code"
-        trigger_emergency_recovery $exit_code
+        error "Module execution failed."
         exit 1
     fi
 done
 
 # ------------------------------------------------------------------------------
-# Final Cleanup (KISS Principle)
+# Final Cleanup
 # ------------------------------------------------------------------------------
-section "Completion" "Cleanup"
+section "Completion" "System Cleanup"
 
-# Logic: Only delete if the standard /root path exists.
-# If running as a normal user (cloned in ~), this does nothing (safer).
+# --- 1. Snapshot Cleanup Logic ---
+clean_intermediate_snapshots() {
+    local config_name="$1"
+    local marker_name="Before Shorin Setup"
+    
+    if ! snapper -c "$config_name" list &>/dev/null; then
+        return
+    fi
+
+    log "Scanning junk snapshots in: $config_name..."
+
+    local start_id
+    start_id=$(snapper -c "$config_name" list --columns number,description | grep "$marker_name" | awk '{print $1}' | tail -n 1)
+
+    if [ -z "$start_id" ]; then
+        warn "Marker '$marker_name' not found in '$config_name'. Skipping."
+        return
+    fi
+
+    local snapshots_to_delete=()
+    while read -r line; do
+        local id
+        local type
+        
+        id=$(echo "$line" | awk '{print $1}')
+        type=$(echo "$line" | awk '{print $3}')
+
+        if [[ "$id" =~ ^[0-9]+$ ]]; then
+            if [ "$id" -gt "$start_id" ]; then
+                if [[ "$type" == "pre" || "$type" == "post" || "$type" == "single" ]]; then
+                    snapshots_to_delete+=("$id")
+                fi
+            fi
+        fi
+    done < <(snapper -c "$config_name" list --columns number,type)
+
+    if [ ${#snapshots_to_delete[@]} -gt 0 ]; then
+        log "Deleting ${#snapshots_to_delete[@]} snapshots in '$config_name'..."
+        if exe snapper -c "$config_name" delete "${snapshots_to_delete[@]}"; then
+            success "Cleaned $config_name."
+        fi
+    else
+        log "No junk snapshots found in '$config_name'."
+    fi
+}
+
+# --- 2. Execute Cleanup ---
+log "Cleaning Pacman/Yay cache..."
+exe pacman -Sc --noconfirm
+
+clean_intermediate_snapshots "root"
+clean_intermediate_snapshots "home"
+
+# --- 3. Remove Installer Files ---
 if [ -d "/root/shorin-arch-setup" ]; then
     log "Removing installer from /root..."
-    # Move to root to avoid 'cannot remove current directory' error
     cd /
     rm -rfv /root/shorin-arch-setup
 else
-    log "Cleanup skipped (Repository not found in /root/shorin-arch-setup)."
+    log "Repo cleanup skipped (not in /root/shorin-arch-setup)."
     log "If you cloned this manually, please remove the folder yourself."
 fi
+
+# --- 4. Final GRUB Update ---
+log "Regenerating final GRUB configuration..."
+exe grub-mkconfig -o /boot/grub/grub.cfg
+
 # --- Completion ---
 clear
 show_banner
@@ -297,7 +367,6 @@ echo ""
 if [ -f "$STATE_FILE" ]; then rm "$STATE_FILE"; fi
 
 log "Archiving log..."
-# Try to read from temp file first, fallback to detection
 if [ -f "/tmp/shorin_install_user" ]; then
     FINAL_USER=$(cat /tmp/shorin_install_user)
 else
@@ -312,19 +381,15 @@ if [ -n "$FINAL_USER" ]; then
     echo -e "   ${H_BLUE}●${NC} Log Saved     : ${BOLD}$FINAL_DOCS/log-shorin-arch-setup.txt${NC}"
 fi
 
-
-
 # --- Reboot Countdown ---
 echo ""
 echo -e "${H_YELLOW}>>> System requires a REBOOT.${NC}"
 
-# Clear input buffer
 while read -r -t 0; do read -r; done
 
 for i in {10..1}; do
     echo -ne "\r   ${DIM}Auto-rebooting in ${i}s... (Press 'n' to cancel)${NC}"
     
-    # Check for 'n' or 'N' input with 1s timeout
     read -t 1 -n 1 input
     if [ $? -eq 0 ]; then
         if [[ "$input" == "n" || "$input" == "N" ]]; then

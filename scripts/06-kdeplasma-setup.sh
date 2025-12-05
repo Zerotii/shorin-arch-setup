@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# 06-kdeplasma-setup.sh - KDE Plasma Setup (Visual Enhanced + Logic Fix)
+# 06-kdeplasma-setup.sh - KDE Plasma Setup (Visual Enhanced + Logic Refactored)
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,49 +12,6 @@ DEBUG=${DEBUG:-0}
 CN_MIRROR=${CN_MIRROR:-0}
 
 check_root
-
-# --- Helper: Local Fallback (Fixed: Multiple files & Dependencies) ---
-install_local_fallback() {
-    local pkg_name="$1"
-    local search_dir="$PARENT_DIR/compiled/$pkg_name"
-    if [ ! -d "$search_dir" ]; then return 1; fi
-
-    # 读取目录下所有包文件
-    mapfile -t pkg_files < <(find "$search_dir" -maxdepth 1 -name "*.pkg.tar.zst")
-
-    if [ ${#pkg_files[@]} -gt 0 ]; then
-        warn "Using local fallback for '$pkg_name' (Found ${#pkg_files[@]} files)..."
-        warn "Note: This uses cached binaries. If the app crashes, please rebuild from source."
-
-        # 1. 收集依赖
-        log "Resolving dependencies for local packages..."
-        local all_deps=""
-        for pkg_file in "${pkg_files[@]}"; do
-            local deps=$(tar -xOf "$pkg_file" .PKGINFO | grep -E '^depend' | cut -d '=' -f 2 | xargs)
-            if [ -n "$deps" ]; then all_deps="$all_deps $deps"; fi
-        done
-        
-        # 2. 安装依赖 (使用 -Syu 确保系统同步)
-        if [ -n "$all_deps" ]; then
-            local unique_deps=$(echo "$all_deps" | tr ' ' '\n' | sort -u | tr '\n' ' ')
-            # [UPDATE] Changed yay -S to yay -Syu
-            if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --asdeps $unique_deps; then
-                error "Failed to install dependencies for local package '$pkg_name'."
-                return 1
-            fi
-        fi
-
-        # 3. 批量安装
-        log "Installing local packages..."
-        if exe runuser -u "$TARGET_USER" -- yay -U --noconfirm "${pkg_files[@]}"; then
-            success "Installed from local."; return 0
-        else
-            error "Local install failed."; return 1
-        fi
-    else
-        return 1
-    fi
-}
 
 section "Phase 6" "KDE Plasma Environment"
 
@@ -111,8 +68,6 @@ if [ "$IS_CN_ENV" = true ]; then
 
     exe flatpak remote-modify --no-p2p flathub
     
-    # [REMOVED] GOPROXY setting
-    
     success "Optimizations Enabled."
 else
     log "Using Global Official Sources."
@@ -124,78 +79,163 @@ echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDO_TEMP_FILE"
 chmod 440 "$SUDO_TEMP_FILE"
 
 # ------------------------------------------------------------------------------
-# 3. Install Dependencies (Logic: Network First -> Local Fallback)
+# 3. Install Dependencies (Logic: Batch -> Verify -> AUR -> Recovery)
 # ------------------------------------------------------------------------------
 section "Step 3/5" "KDE Dependencies"
 
 LIST_FILE="$PARENT_DIR/kde-applist.txt"
-FAILED_PACKAGES=()
+UNDO_SCRIPT="$PARENT_DIR/undochange.sh"
+
+# --- Critical Failure Handler ---
+critical_failure_handler() {
+    local failed_pkg="$1"
+    
+    echo ""
+    echo -e "\033[0;31m################################################################\033[0m"
+    echo -e "\033[0;31m#                                                              #\033[0m"
+    echo -e "\033[0;31m#   CRITICAL INSTALLATION FAILURE DETECTED                     #\033[0m"
+    echo -e "\033[0;31m#   Package: $failed_pkg                                       #\033[0m"
+    echo -e "\033[0;31m#   Status: Package not found after install attempt.           #\033[0m"
+    echo -e "\033[0;31m#                                                              #\033[0m"
+    echo -e "\033[0;31m#   Would you like to restore snapshot (undo changes)?         #\033[0m"
+    echo -e "\033[0;31m################################################################\033[0m"
+    echo ""
+
+    while true; do
+        read -p "Execute System Recovery? [y/n]: " -r choice
+        case "$choice" in 
+            [yY][eE][sS]|[yY]) 
+                if [ -f "$UNDO_SCRIPT" ]; then
+                    warn "Executing recovery script: $UNDO_SCRIPT"
+                    bash "$UNDO_SCRIPT"
+                    exit 1
+                else
+                    error "Recovery script not found at: $UNDO_SCRIPT"
+                    exit 1
+                fi
+                ;;
+            [nN][oO]|[nN])
+                warn "User chose NOT to recover. System might be in a broken state."
+                error "Installation aborted due to failure in: $failed_pkg"
+                exit 1
+                ;;
+            *)
+                echo -e "\033[1;33mInvalid input. Please enter 'y' to recover or 'n' to abort.\033[0m"
+                ;;
+        esac
+    done
+}
+
+# --- Verification Function ---
+verify_installation() {
+    local pkg="$1"
+    # 使用 pacman -Q 检查包是否存在
+    if pacman -Q "$pkg" &>/dev/null; then
+        return 0 # 已安装
+    else
+        return 1 # 未安装
+    fi
+}
 
 if [ -f "$LIST_FILE" ]; then
     mapfile -t PACKAGE_ARRAY < <(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | tr -d '\r')
+    
     if [ ${#PACKAGE_ARRAY[@]} -gt 0 ]; then
-        BATCH_LIST=""
-        GIT_LIST=()
+        BATCH_LIST=()
+        AUR_LIST=()
+
+        # 1. Parse List & Separate
         for pkg in "${PACKAGE_ARRAY[@]}"; do
-            if [[ "$pkg" == *"-git" ]]; then GIT_LIST+=("$pkg"); else BATCH_LIST+="$pkg "; fi
-        done
-        
-        # Phase 1: Batch
-        if [ -n "$BATCH_LIST" ]; then
-            log "Batch Install..."
-            # [UPDATE] Ensuring -Syu, Removed GOPROXY
-            if ! exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
-                warn "Batch failed. Proceeding to individual install..."
+            # 兼容旧列表习惯
+            [ "$pkg" == "imagemagic" ] && pkg="imagemagick"
+
+            if [[ "$pkg" == "AUR:"* ]]; then
+                clean_pkg="${pkg#AUR:}"
+                AUR_LIST+=("$clean_pkg")
+            elif [[ "$pkg" == *"-git" ]]; then
+                # 兼容旧逻辑：如果没写 AUR: 但带了 -git，也视为 AUR
+                AUR_LIST+=("$pkg")
+            else
+                BATCH_LIST+=("$pkg")
             fi
+        done
+
+        # 2. Phase 1: Batch Install (Repo Packages)
+        if [ ${#BATCH_LIST[@]} -gt 0 ]; then
+            log "Phase 1: Batch Installing Repository Packages..."
+            
+            # 尝试安装
+            exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "${BATCH_LIST[@]}"
+            
+            # --- Verification Loop ---
+            log "Verifying batch installation..."
+            for pkg in "${BATCH_LIST[@]}"; do
+                if ! verify_installation "$pkg"; then
+                    warn "Verification failed for '$pkg'. Retrying individually..."
+                    # 失败重试：单独安装这一个
+                    exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed "$pkg"
+                    
+                    # 二次核查
+                    if ! verify_installation "$pkg"; then
+                        critical_failure_handler "$pkg (Repo)"
+                    else
+                        success "Verified: $pkg"
+                    fi
+                fi
+            done
+            success "Batch phase verified."
         fi
 
-        # Phase 2: Git (Network Priority)
-        if [ ${#GIT_LIST[@]} -gt 0 ]; then
-            log "Git Install..."
-            for git_pkg in "${GIT_LIST[@]}"; do
+        # 3. Phase 2: Sequential Install (AUR Packages)
+        if [ ${#AUR_LIST[@]} -gt 0 ]; then
+            log "Phase 2: Installing AUR Packages (Sequential)..."
+            log "Hint: Use Ctrl+C to skip a specific package download step."
+
+            for aur_pkg in "${AUR_LIST[@]}"; do
+                log "Installing '$aur_pkg'..."
                 
-                log "Installing '$git_pkg' (Network Build)..."
-                
-                # 1. Attempt Network Install
-                # [UPDATE] Ensuring -Syu, Removed GOPROXY
-                if exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$git_pkg"; then
-                    success "Installed $git_pkg"
-                else
-                    warn "Network install failed for $git_pkg."
+                # Try 1
+                runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$aur_pkg"
+                EXIT_CODE=$?
+
+                # Ctrl+C 跳过处理
+                if [ $EXIT_CODE -eq 130 ]; then
+                    warn "Skipped '$aur_pkg' by user request (Ctrl+C)."
+                    continue
+                fi
+
+                # --- Verification ---
+                if ! verify_installation "$aur_pkg"; then
+                    warn "Verification failed for '$aur_pkg'. Retrying once..."
                     
-                    # 2. Final Fallback: Local Cache
-                    warn "Network failed. Attempting local fallback for '$git_pkg'..."
-                    if install_local_fallback "$git_pkg"; then
-                        warn "INSTALLED FROM LOCAL CACHE. Rebuild recommended later."
-                    else
-                        error "Failed to install '$git_pkg' after all attempts."
-                        FAILED_PACKAGES+=("$git_pkg")
+                    # Retry 1
+                    runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$aur_pkg"
+                    RETRY_CODE=$?
+
+                    if [ $RETRY_CODE -eq 130 ]; then
+                         warn "Skipped '$aur_pkg' on retry by user request (Ctrl+C)."
+                         continue
                     fi
+
+                    # 二次核查
+                    if ! verify_installation "$aur_pkg"; then
+                        critical_failure_handler "$aur_pkg (AUR)"
+                    else
+                         success "Verified: $aur_pkg"
+                    fi
+                else
+                    success "Verified: $aur_pkg"
                 fi
             done
         fi
         
-        # Report Failures
-        if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
-            DOCS_DIR="$HOME_DIR/Documents"
-            REPORT_FILE="$DOCS_DIR/安装失败的软件.txt"
-            if [ ! -d "$DOCS_DIR" ]; then runuser -u "$TARGET_USER" -- mkdir -p "$DOCS_DIR"; fi
-            
-            # Append timestamp header
-            echo "--- Installation Failed Report $(date) ---" >> "$REPORT_FILE"
-            printf "%s\n" "${FAILED_PACKAGES[@]}" >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-            
-            chown "$TARGET_USER:$TARGET_USER" "$REPORT_FILE"
-            warn "Some packages failed. List saved to: $REPORT_FILE"
-        fi
     fi
 else
     warn "kde-applist.txt not found."
 fi
 
 # ------------------------------------------------------------------------------
-# 4. Dotfiles Deployment (FIXED CP-RF)
+# 4. Dotfiles Deployment
 # ------------------------------------------------------------------------------
 section "Step 4/5" "KDE Config Deployment"
 
@@ -285,7 +325,6 @@ success "SDDM enabled. Will start on reboot."
 # ------------------------------------------------------------------------------
 section "Cleanup" "Restoring State"
 rm -f "$SUDO_TEMP_FILE"
-# [REMOVED] GOPROXY sed command
 success "Done."
 
 log "Module 06 completed."
