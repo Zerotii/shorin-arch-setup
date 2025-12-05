@@ -260,7 +260,7 @@ if [ -d "$DOTFILES_SOURCE" ]; then
         exe cp -rf "$DOTFILES_SOURCE/.config/." "$HOME_DIR/.config/" 2>/dev/null || true
         
         log "Fixing permissions for .config..."
-        exe chown -R "$TARGET_USER:$TARGET_USER" "$HOME_DIR/.config"
+        exe chown -R "$TARGET_USER" "$HOME_DIR/.config"
     fi
 
     # --- Process .local ---
@@ -272,7 +272,7 @@ if [ -d "$DOTFILES_SOURCE" ]; then
         exe cp -rf "$DOTFILES_SOURCE/.local/." "$HOME_DIR/.local/" 2>/dev/null || true
         
         log "Fixing permissions for .local..."
-        exe chown -R "$TARGET_USER:$TARGET_USER" "$HOME_DIR/.local"
+        exe chown -R "$TARGET_USER" "$HOME_DIR/.local"
     fi
     
     success "KDE Dotfiles applied and permissions fixed."
@@ -295,7 +295,7 @@ fi
 if [ -f "$SOURCE_README" ]; then
     log "Copying KDE-README.txt..."
     exe cp "$SOURCE_README" "$DESKTOP_DIR/"
-    exe chown "$TARGET_USER:$TARGET_USER" "$DESKTOP_DIR/KDE-README.txt"
+    exe chown "$TARGET_USER" "$DESKTOP_DIR/KDE-README.txt"
     success "Readme deployed."
 else
     warn "resources/KDE-README.txt not found."
