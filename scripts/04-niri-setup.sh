@@ -199,10 +199,16 @@ echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDO_TEMP_FILE"
 chmod 440 "$SUDO_TEMP_FILE"
 
 # ==============================================================================
-# STEP 5: Dependencies (Interactive Recovery & TUI Selection)
+# STEP 5: Dependencies (Archinstall-style TUI with FZF)
 # ==============================================================================
 section "Step 4/9" "Dependencies"
 LIST_FILE="$PARENT_DIR/niri-applist.txt"
+
+# 0. 确保安装了 FZF (实现 TUI 的核心工具)
+if ! command -v fzf &> /dev/null; then
+    log "Installing dependency: fzf (for advanced menu)..."
+    pacman -S --noconfirm fzf >/dev/null 2>&1
+fi
 
 # Verification Function
 verify_installation() {
@@ -211,64 +217,59 @@ verify_installation() {
 }
 
 if [ -f "$LIST_FILE" ]; then
-    log "Parsing application list for TUI Selection..."
+    log "Launching Archinstall-style Package Selection..."
     
     # -------------------------------------------------------------
-    # TUI Selection Logic
+    # FZF TUI Logic
     # -------------------------------------------------------------
-    MENU_ARGS=()
     
-    # Read file line by line to build TUI args
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line=$(echo "$line" | tr -d '\r' | xargs)
-        [[ -z "$line" || "$line" =~ ^# ]] && continue
-        
-        # Parse "Package # Description" or just "Package"
-        if [[ "$line" == *"#"* ]]; then
-            pkg_name="${line%%#*}"    # Left of #
-            pkg_desc="${line#*#}"     # Right of #
-        else
-            pkg_name="$line"
-            pkg_desc="Niri Component"
-        fi
-        
-        # Trim whitespace
-        pkg_name=$(echo "$pkg_name" | xargs)
-        pkg_desc=$(echo "$pkg_desc" | xargs)
-        
-        # Check install status for better UX
-        if pacman -Qi "$pkg_name" &>/dev/null; then
-            MENU_ARGS+=("$pkg_name" "[Installed] $pkg_desc" "ON")
-        else
-            MENU_ARGS+=("$pkg_name" "$pkg_desc" "ON")
-        fi
-    done < "$LIST_FILE"
-
-    if [ ${#MENU_ARGS[@]} -eq 0 ]; then
-        warn "App list is empty or invalid."
+    # 1. 预处理文件：去除空行和纯注释行(# --- 这种)
+    # 2. 通过管道传给 fzf
+    # fzf 参数解释:
+    #   --multi: 开启多选 (TAB键)
+    #   --layout=reverse: 列表从上往下排 (像 archinstall)
+    #   --border: 显示边框
+    #   --prompt: 搜索提示符
+    #   --preview: 核心！读取当前行，用 awk 提取 # 后面的内容显示在右侧
+    #   --preview-window: 预览窗口在右侧，占 50%，自动换行
+    #   --bind: 绑定 ctrl-a 全选, ctrl-d 取消全选
+    
+    SELECTED_LINES=$(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | \
+        fzf --multi \
+            --layout=reverse \
+            --border \
+            --margin=1,2 \
+            --prompt="Search (Type to filter) > " \
+            --pointer="->" \
+            --marker="+" \
+            --info=hidden \
+            --header="TAB: Select/Unselect | ENTER: Confirm | CTRL-A: Select All" \
+            --preview "echo {} | awk -F'#' '{print \$2}' | sed 's/^ //'" \
+            --preview-window=right:45%:wrap:border-left \
+            --color=dark,fg+:bright-white,bg+:black,hl:yellow,hl+:yellow,info:hidden,prompt:cyan,pointer:cyan,marker:green,spinner:yellow,header:gray)
+    
+    # Check if user cancelled (Empty output)
+    if [ -z "$SELECTED_LINES" ]; then
+        warn "User cancelled package selection or selected nothing."
         PACKAGE_ARRAY=()
     else
-        # Show Whiptail Menu
-        # Redirect output to file descriptor 3 to capture selection, while showing TUI on stderr
-        SELECTION_STR=$(whiptail --title "Niri Package Selection" \
-                                 --checklist "Select packages to install (Space to toggle, Enter to confirm):" \
-                                 22 90 12 \
-                                 "${MENU_ARGS[@]}" \
-                                 3>&1 1>&2 2>&3)
-        
-        # Check if user cancelled
-        if [ $? -ne 0 ]; then
-            warn "User cancelled package selection. Skipping dependency installation."
-            PACKAGE_ARRAY=()
-        else
-            # Eval the string (e.g., "pkg1" "pkg2") into an array
-            eval "PACKAGE_ARRAY=($SELECTION_STR)"
-        fi
+        # 3. 解析结果
+        # fzf 返回的是整行 (例如 "firefox # 浏览器")
+        # 我们需要提取出包名 (空格前的部分)
+        PACKAGE_ARRAY=()
+        while IFS= read -r line; do
+            # 提取 # 前面的部分，并去除两端空格
+            pkg_part="${line%%#*}"
+            pkg_clean=$(echo "$pkg_part" | xargs)
+            if [ -n "$pkg_clean" ]; then
+                PACKAGE_ARRAY+=("$pkg_clean")
+            fi
+        done <<< "$SELECTED_LINES"
     fi
+
     # -------------------------------------------------------------
     # End TUI Logic
     # -------------------------------------------------------------
-
     
     if [ ${#PACKAGE_ARRAY[@]} -gt 0 ]; then
         BATCH_LIST=()
@@ -276,95 +277,58 @@ if [ -f "$LIST_FILE" ]; then
 
         info_kv "Selection" "${#PACKAGE_ARRAY[@]} packages scheduled."
 
-        # 1. Parse List & Separate (Now using user selection)
+        # Classification Logic (Unchanged)
         for pkg in "${PACKAGE_ARRAY[@]}"; do
             [ "$pkg" == "imagemagic" ] && pkg="imagemagick"
             
-            # Remove "AUR:" prefix if present in the selection, though TUI usually strips it visually
-            # If your text file has "AUR:yay", handle it:
+            # Check for AUR prefix explicitly or implicit logic
             if [[ "$pkg" == "AUR:"* ]]; then
                 clean_pkg="${pkg#AUR:}"
                 AUR_LIST+=("$clean_pkg")
+            elif [[ "$pkg" == *"-git" ]] || [[ "$pkg" == *"-bin" ]]; then
+                # Simple heuristic: usually -git/-bin are AUR, but not always. 
+                # Better to stick to your LIST definition or let yay handle it.
+                # Here we assume your list uses AUR: prefix OR we treat everything as 'yay' target
+                # Yay handles repo vs aur automatically, so separating is mostly for batch speed.
+                
+                # Let's trust yay's auto-detection for simplicity unless specifically prefixed
+                BATCH_LIST+=("$pkg")
             else
-                # Also check blindly if we missed the AUR prefix but it IS an AUR pkg?
-                # For safety, stick to list definition or treat everything else as Repo
                 BATCH_LIST+=("$pkg")
             fi
         done
 
-        # 2. Phase 1: Batch Install (Repo Packages)
+        # --- Phase 1: Batch Install (Using Yay for everything is often safer for mixing) ---
+        # However, to keep your robust error handling, we verify repo packages first.
+        
         if [ ${#BATCH_LIST[@]} -gt 0 ]; then
-            log "Phase 1: Batch Installing Repository Packages..."
+            log "Phase 1: Installing Selected Packages..."
             
-            # Using || true ensures that if yay returns non-zero, TRAP ERR isn't triggered immediately,
-            # allowing us to do our own verification logic below.
-            exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "${BATCH_LIST[@]}" || true
+            # We construct one giant command. Yay handles mixed Repo/AUR gracefully usually.
+            # But adhering to your request for robustness:
             
-            log "Verifying batch installation..."
-            for pkg in "${BATCH_LIST[@]}"; do
+            exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "${BATCH_LIST[@]}" "${AUR_LIST[@]}" || true
+            
+            # Verify ALL
+            log "Verifying installation..."
+            ALL_PKGS=("${BATCH_LIST[@]}" "${AUR_LIST[@]}")
+            
+            for pkg in "${ALL_PKGS[@]}"; do
                 if ! verify_installation "$pkg"; then
                     warn "Verification failed for '$pkg'. Retrying individually..."
-                    # Retry
                     exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed "$pkg" || true
                     
-                    # Final Check
                     if ! verify_installation "$pkg"; then
-                        # Trigger the Big Red Box
-                        critical_failure_handler "Failed to install '$pkg' (Repo) after retry."
+                         # Trigger the Big Red Box
+                        critical_failure_handler "Failed to install '$pkg' after retry."
                     else
                         success "Verified: $pkg"
                     fi
                 fi
             done
-            success "Batch phase verification complete."
+            success "Installation phase complete."
         fi
 
-        # 3. Phase 2: Sequential Install (AUR Packages)
-        if [ ${#AUR_LIST[@]} -gt 0 ]; then
-            log "Phase 2: Installing AUR Packages (Sequential)..."
-            log "Hint: Use Ctrl+C to skip a specific package download step."
-
-            for aur_pkg in "${AUR_LIST[@]}"; do
-                log "Installing '$aur_pkg'..."
-                
-                # Try 1
-                runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$aur_pkg" || true
-                EXIT_CODE=$?
-
-                # Handle Ctrl+C skip (130) manually
-                if [ $EXIT_CODE -eq 130 ]; then
-                    warn "Skipped '$aur_pkg' by user request (Ctrl+C)."
-                    continue
-                elif [ $EXIT_CODE -ne 0 ]; then
-                    warn "Yay exited with error code $EXIT_CODE for '$aur_pkg'. Will try to verify."
-                fi
-
-                # Verification
-                if ! verify_installation "$aur_pkg"; then
-                    warn "Verification failed for '$aur_pkg'. Retrying once..."
-                    
-                    # Retry
-                    runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "$aur_pkg" || true
-                    RETRY_CODE=$?
-
-                    if [ $RETRY_CODE -eq 130 ]; then
-                         warn "Skipped '$aur_pkg' on retry by user request (Ctrl+C)."
-                         continue
-                    fi
-
-                    # Final Check
-                    if ! verify_installation "$aur_pkg"; then
-                        # Trigger the Big Red Box
-                        critical_failure_handler "Failed to install '$aur_pkg' (AUR) after retry."
-                    else
-                         success "Verified: $aur_pkg"
-                    fi
-                else
-                    success "Verified: $aur_pkg"
-                fi
-            done
-        fi
-    
         # Recovery Check
         if ! command -v waybar &> /dev/null; then
             warn "Waybar missing. Installing stock..."
