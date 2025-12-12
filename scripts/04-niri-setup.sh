@@ -234,6 +234,12 @@ if [ -f "$LIST_FILE" ]; then
     #   --preview-window: 预览窗口在右侧，占 50%，自动换行
     #   --bind: 绑定 ctrl-a 全选, ctrl-d 取消全选
     
+    # -------------------------------------------------------------
+    # FZF TUI Logic (Fixed for TTY, Clean Layout, Default All)
+    # -------------------------------------------------------------
+    
+    # 1. 过滤空行和注释
+    # 2. 启动 FZF
     SELECTED_LINES=$(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | \
         fzf --multi \
             --layout=reverse \
@@ -241,12 +247,15 @@ if [ -f "$LIST_FILE" ]; then
             --margin=1,2 \
             --prompt="Search > " \
             --pointer="->" \
-            --marker="+" \
+            --marker="[*] " \
+            --delimiter='#' \
+            --with-nth=1 \
+            --bind 'load:select-all' \
+            --bind 'ctrl-a:select-all,ctrl-d:deselect-all' \
             --info=hidden \
-            --header="TAB: Select | ENTER: Confirm | CTRL-A: Select All" \
+            --header="TAB: Toggle | ENTER: Confirm | CTRL-D: Deselect All" \
             --preview "echo {} | awk -F'#' '{print \$2}' | sed 's/^ //'" \
-            --preview-window=right:45%:wrap:border-left \
-            --bind "ctrl-a:select-all,ctrl-d:deselect-all" \
+            --preview-window=right:50%:wrap:border-left \
             --color=dark,fg+:bright-white,bg+:black,hl:yellow,hl+:yellow,prompt:cyan,pointer:cyan,marker:green,spinner:yellow,header:gray)
     
     # Check if user cancelled (Empty output)
