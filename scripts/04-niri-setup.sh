@@ -216,9 +216,13 @@ verify_installation() {
 }
 
 if [ -f "$LIST_FILE" ]; then
-    # 1. Pre-load default list (Clean parse for auto-install)
-    # We extract package names (before #) just in case we hit timeout
-    mapfile -t DEFAULT_LIST < <(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | awk -F'#' '{print $1}' | xargs)
+    # [FIX] 1. Pre-load CLEAN default list
+    # 这里我们提前清洗数据：
+    # 1. 去掉注释 (# 及后面的内容)
+    # 2. 去掉 AUR: 前缀 (虽然 yay 也能处理，但保持一致性更好)
+    # 3. 去掉首尾空格
+    # 4. 过滤空行
+    mapfile -t DEFAULT_LIST < <(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | sed 's/#.*//; s/AUR://g' | xargs -n1)
 
     if [ ${#DEFAULT_LIST[@]} -eq 0 ]; then
         warn "App list is empty. Skipping."
@@ -231,11 +235,6 @@ if [ -f "$LIST_FILE" ]; then
         echo -e "   ${H_YELLOW}>>> Default installation will start in 120 seconds.${NC}"
         echo -e "   ${H_CYAN}>>> Press ANY KEY to customize package selection...${NC}"
         
-        # read -t 120: Wait 120s
-        # -n 1: Return after 1 char
-        # -s: Silent input
-        # -r: Raw input
-        # || true ensures script continues even if timeout (exit code 142)
         if read -t 120 -n 1 -s -r; then
             # [CASE A] User pressed a key -> Enter FZF
             USER_INTERVENTION=true
@@ -249,11 +248,11 @@ if [ -f "$LIST_FILE" ]; then
             # FZF TUI Logic (Interactive Mode)
             # -------------------------------------------------------------
             
-            # 1. Clear screen for immersion
             clear
             echo -e "\n  Loading package list..."
 
-            # 2. Launch FZF
+            # FZF 依然需要读取原始文件来显示描述，所以这里还是用 grep 读取原始文件
+            # 这里的逻辑保持不变，因为 FZF 的输出解析逻辑已经包含了去重和清洗
             SELECTED_LINES=$(grep -vE "^\s*#|^\s*$" "$LIST_FILE" | \
                 sed -E 's/[[:space:]]+#/\t#/' | \
                 fzf --multi \
@@ -279,18 +278,20 @@ if [ -f "$LIST_FILE" ]; then
                     --color=prompt:cyan,pointer:cyan:bold,marker:green:bold \
                     --color=spinner:yellow)
             
-            # 3. Clear screen exit
             clear
 
-            # 4. Process User Selection
             if [ -z "$SELECTED_LINES" ]; then
                 warn "User cancelled selection. Installing NOTHING."
                 PACKAGE_ARRAY=()
             else
                 PACKAGE_ARRAY=()
                 while IFS= read -r line; do
-                    pkg_clean=$(echo "$line" | cut -f1 -d$'\t' | xargs)
-                    [ -n "$pkg_clean" ] && PACKAGE_ARRAY+=("$pkg_clean")
+                    # FZF 输出的是 "AUR:pkgname <tab> # desc"
+                    # 这里我们需要清洗出 pkgname 并去掉前缀
+                    raw_pkg=$(echo "$line" | cut -f1 -d$'\t' | xargs)
+                    # [FIX] 去掉可能存在的 AUR: 前缀
+                    clean_pkg="${raw_pkg#AUR:}"
+                    [ -n "$clean_pkg" ] && PACKAGE_ARRAY+=("$clean_pkg")
                 done <<< "$SELECTED_LINES"
             fi
             
@@ -300,9 +301,9 @@ if [ -f "$LIST_FILE" ]; then
             # -------------------------------------------------------------
             echo "" 
             log "Timeout reached (120s). Auto-confirming ALL packages."
+            # [FIX] 直接使用我们在开头清洗好的 DEFAULT_LIST
             PACKAGE_ARRAY=("${DEFAULT_LIST[@]}")
         fi
-        # -------------------------------------------------------------
     fi
     
     # === INSTALLATION PHASE (Common for both paths) ===
