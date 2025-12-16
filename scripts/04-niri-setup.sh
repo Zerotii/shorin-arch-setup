@@ -199,6 +199,7 @@ log "Configuring temporary sudo access..."
 SUDO_TEMP_FILE="/etc/sudoers.d/99_shorin_installer_temp"
 echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDO_TEMP_FILE"
 chmod 440 "$SUDO_TEMP_FILE"
+
 # ==============================================================================
 # STEP 5: Dependencies
 # ==============================================================================
@@ -287,6 +288,30 @@ if [ -f "$LIST_FILE" ]; then
         fi
     fi
 
+    # --------------------------------------------------------------------------
+    # [NEW] Pre-Installation Filter: Handle Pseudo-packages (LazyVim)
+    # --------------------------------------------------------------------------
+    INSTALL_LAZYVIM=false
+    FINAL_ARRAY=()
+
+    if [ ${#PACKAGE_ARRAY[@]} -gt 0 ]; then
+        for pkg in "${PACKAGE_ARRAY[@]}"; do
+            # 转换为小写比较
+            lower_pkg=$(echo "$pkg" | tr '[:upper:]' '[:lower:]')
+            
+            if [ "$lower_pkg" == "lazyvim" ]; then
+                INSTALL_LAZYVIM=true
+                # 自动注入 LazyVim 的硬性依赖
+                FINAL_ARRAY+=("neovim" "ripgrep" "fd" "ttf-jetbrains-mono-nerd" "git")
+                info_kv "Config" "LazyVim detected" "Dependencies injected"
+            else
+                FINAL_ARRAY+=("$pkg")
+            fi
+        done
+        # 更新 PACKAGE_ARRAY 为过滤后的真实包名列表
+        PACKAGE_ARRAY=("${FINAL_ARRAY[@]}")
+    fi
+
     # === INSTALLATION PHASE ===
     if [ ${#PACKAGE_ARRAY[@]} -gt 0 ]; then
         BATCH_LIST=()
@@ -307,6 +332,7 @@ if [ -f "$LIST_FILE" ]; then
         # 1. Repo Packages (Batch)
         if [ ${#BATCH_LIST[@]} -gt 0 ]; then
             log "Phase 1: Installing Repository Packages..."
+            # 使用 || true 防止 yay 返回非零退出码中断脚本
             exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None "${BATCH_LIST[@]}" || true
             
             # Verify
@@ -342,6 +368,31 @@ if [ -f "$LIST_FILE" ]; then
         if ! command -v waybar &> /dev/null; then
             warn "Waybar missing. Installing stock..."
             exe pacman -Syu --noconfirm --needed waybar
+        fi
+
+        # --------------------------------------------------------------------------
+        # [NEW] Post-Installation Configuration: LazyVim
+        # --------------------------------------------------------------------------
+        if [ "$INSTALL_LAZYVIM" = true ]; then
+            section "Config" "Setting up LazyVim"
+            NVIM_CONFIG_DIR="$HOME_DIR/.config/nvim"
+            
+            # 1. 备份旧配置
+            if [ -d "$NVIM_CONFIG_DIR" ]; then
+                BACKUP_NVIM="$HOME_DIR/.config/nvim.bak.$(date +%s)"
+                warn "Existing Neovim config detected. Backing up to $BACKUP_NVIM..."
+                mv "$NVIM_CONFIG_DIR" "$BACKUP_NVIM"
+            fi
+
+            # 2. 克隆 LazyVim Starter
+            log "Cloning LazyVim starter template..."
+            if runuser -u "$TARGET_USER" -- git clone https://github.com/LazyVim/starter "$NVIM_CONFIG_DIR"; then
+                # 移除 .git 目录
+                rm -rf "$NVIM_CONFIG_DIR/.git"
+                success "LazyVim installed successfully."
+            else
+                error "Failed to clone LazyVim."
+            fi
         fi
 
     else
