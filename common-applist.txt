@@ -41,3 +41,4 @@ flatpak:com.github.unrud.VideoDownloader # Download youtube or bilibili videos
 flatpak:io.gitlab.theevilskeleton.Upscaler # image upscaler (make it more clear)
 flatpak:com.github.huluti.Curtail        # compress image (make it smaller)
 flatpak:io.gitlab.adhami3310.Footage     # easy cut vidoes and compress videos
+flatpak:com.github.tchx84.Flatseal       # flatpak permission manager 
