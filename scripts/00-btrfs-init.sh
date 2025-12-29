@@ -33,23 +33,21 @@ if [ "$ROOT_FSTYPE" == "btrfs" ]; then
         if exe snapper -c root create-config /; then
             success "Config 'root' created."
             
-            # Apply Retention Policy (TIMELINE DISABLED)
+            # Apply Retention Policy
             exe snapper -c root set-config \
                 ALLOW_GROUPS="wheel" \
-                TIMELINE_CREATE="no" \
+                TIMELINE_CREATE="yes" \
                 TIMELINE_CLEANUP="yes" \
                 NUMBER_LIMIT="10" \
                 NUMBER_LIMIT_IMPORTANT="5" \
-                TIMELINE_LIMIT_HOURLY="0" \
-                TIMELINE_LIMIT_DAILY="0" \
+                TIMELINE_LIMIT_HOURLY="5" \
+                TIMELINE_LIMIT_DAILY="7" \
                 TIMELINE_LIMIT_WEEKLY="0" \
                 TIMELINE_LIMIT_MONTHLY="0" \
                 TIMELINE_LIMIT_YEARLY="0"
         fi
     else
-        log "Config 'root' already exists. Ensuring timeline is disabled..."
-        # Enforce timeline off even if config existed
-        exe_silent snapper -c root set-config TIMELINE_CREATE="no"
+        log "Config 'root' already exists."
     fi
 else
     warn "Root is not Btrfs. Skipping Root snapshot."
@@ -74,23 +72,21 @@ if findmnt -n -o FSTYPE /home | grep -q "btrfs"; then
         if exe snapper -c home create-config /home; then
             success "Config 'home' created."
             
-            # Apply same policy to home (TIMELINE DISABLED)
+            # Apply same policy to home
             exe snapper -c home set-config \
                 ALLOW_GROUPS="wheel" \
-                TIMELINE_CREATE="no" \
+                TIMELINE_CREATE="yes" \
                 TIMELINE_CLEANUP="yes" \
                 NUMBER_LIMIT="10" \
                 NUMBER_LIMIT_IMPORTANT="5" \
-                TIMELINE_LIMIT_HOURLY="0" \
-                TIMELINE_LIMIT_DAILY="0" \
+                TIMELINE_LIMIT_HOURLY="5" \
+                TIMELINE_LIMIT_DAILY="7" \
                 TIMELINE_LIMIT_WEEKLY="0" \
                 TIMELINE_LIMIT_MONTHLY="0" \
                 TIMELINE_LIMIT_YEARLY="0"
         fi
     else
-        log "Config 'home' already exists. Ensuring timeline is disabled..."
-        # Enforce timeline off even if config existed
-        exe_silent snapper -c home set-config TIMELINE_CREATE="no"
+        log "Config 'home' already exists."
     fi
 else
     log "/home is not a separate Btrfs volume. Skipping."
@@ -101,39 +97,27 @@ fi
 # ------------------------------------------------------------------------------
 section "Safety Net" "Creating Initial Snapshots"
 
-SNAPSHOT_DESC="Before Shorin Setup"
-
 # Snapshot Root
 if snapper list-configs | grep -q "^root "; then
-    # Check if snapshot already exists
-    if snapper -c root list | grep -q "$SNAPSHOT_DESC"; then
-        log "Root snapshot '$SNAPSHOT_DESC' already exists. Skipping creation."
+    log "Creating Root snapshot..."
+    if exe snapper -c root create --description "Before Shorin Setup" --cleanup-algorithm number; then
+        success "Root snapshot created."
     else
-        log "Creating Root snapshot..."
-        if exe snapper -c root create --description "$SNAPSHOT_DESC"; then
-            success "Root snapshot created."
-        else
-            error "Failed to create Root snapshot."
-            warn "Cannot proceed without a safety snapshot. Aborting."
-            exit 1
-        fi
+        error "Failed to create Root snapshot."
+        warn "Cannot proceed without a safety snapshot. Aborting."
+        exit 1
     fi
 fi
 
 # Snapshot Home
 if snapper list-configs | grep -q "^home "; then
-    # Check if snapshot already exists
-    if snapper -c home list | grep -q "$SNAPSHOT_DESC"; then
-        log "Home snapshot '$SNAPSHOT_DESC' already exists. Skipping creation."
+    log "Creating Home snapshot..."
+    if exe snapper -c home create --description "Before Shorin Setup" --cleanup-algorithm number; then
+        success "Home snapshot created."
     else
-        log "Creating Home snapshot..."
-        if exe snapper -c home create --description "$SNAPSHOT_DESC"; then
-            success "Home snapshot created."
-        else
-            error "Failed to create Home snapshot."
-            # This is less critical than root, but should still be a failure.
-            exit 1
-        fi
+        error "Failed to create Home snapshot."
+        # This is less critical than root, but should still be a failure.
+        exit 1
     fi
 fi
 
