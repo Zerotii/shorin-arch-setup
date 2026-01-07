@@ -216,24 +216,9 @@ if [ -f "$DESKTOP_FILE" ]; then
 fi
 
 # ==============================================================================
-# STEP 4: Network Optimization
+# STEP 4: temp sudo file
 # ==============================================================================
-section "Step 3/9" "Network Optimization"
-exe pacman -S --noconfirm --needed flatpak gnome-software
-exe flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-
-CURRENT_TZ=$(readlink -f /etc/localtime)
-IS_CN_ENV=false
-if [[ "$CURRENT_TZ" == *"Shanghai"* ]] || [ "$CN_MIRROR" == "1" ] || [ "$DEBUG" == "1" ]; then
-  IS_CN_ENV=true
-  info_kv "Region" "China Optimization Active"
-fi
-
-if [ "$IS_CN_ENV" = true ]; then
-  select_flathub_mirror
-else
-  log "Using Global Sources."
-fi
+section "Step 3/9" "Temp sudo file"
 
 SUDO_TEMP_FILE="/etc/sudoers.d/99_shorin_installer_temp"
 echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" >"$SUDO_TEMP_FILE"

@@ -32,7 +32,7 @@ if [ "$ROOT_FSTYPE" == "btrfs" ]; then
         if exe snapper -c root create-config /; then
             success "Snapper config created."
             log "Applying retention policy..."
-            exe snapper -c root set-config ALLOW_GROUPS="wheel" TIMELINE_CREATE="yes" TIMELINE_CLEANUP="yes" NUMBER_LIMIT="10" NUMBER_LIMIT_IMPORTANT="5" TIMELINE_LIMIT_HOURLY="5" TIMELINE_LIMIT_DAILY="7" TIMELINE_LIMIT_WEEKLY="0" TIMELINE_LIMIT_MONTHLY="0" TIMELINE_LIMIT_YEARLY="0"
+            exe snapper -c root set-config ALLOW_GROUPS="wheel" TIMELINE_CREATE="no" TIMELINE_CLEANUP="yes" NUMBER_LIMIT="10" NUMBER_LIMIT_IMPORTANT="5" TIMELINE_LIMIT_HOURLY="5" TIMELINE_LIMIT_DAILY="7" TIMELINE_LIMIT_WEEKLY="0" TIMELINE_LIMIT_MONTHLY="0" TIMELINE_LIMIT_YEARLY="0"
             success "Policy applied."
         fi
     else
@@ -137,14 +137,9 @@ if rfkill list bluetooth >/dev/null 2>&1; then BT_FOUND=true; fi
 
 if [ "$BT_FOUND" = true ]; then
     info_kv "Hardware" "Detected"
-    
-    if [ "$DESKTOP_ENV" == "kde" ]; then
-        log "Desktop is KDE: Installing Bluez only..."
-        exe pacman -Syu --noconfirm --needed bluez
-    else
-        log "Desktop is Niri: Installing Bluez + Bluetui..."
-        exe pacman -Syu --noconfirm --needed bluez bluetui
-    fi
+
+    log "Installing Bluez "
+    exe pacman -Syu --noconfirm --needed bluez
 
     exe systemctl enable --now bluetooth
     success "Bluetooth service enabled."
@@ -179,3 +174,23 @@ exe pacman -Syu --noconfirm --needed xdg-user-dirs
 success "xdg-user-dirs installed."
 
 log "Module 02 completed."
+
+# ------------------------------------------------------------------------------
+# 9. flatpak
+# ------------------------------------------------------------------------------
+
+exe pacman -S --noconfirm --needed flatpak
+exe flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+CURRENT_TZ=$(readlink -f /etc/localtime)
+IS_CN_ENV=false
+if [[ "$CURRENT_TZ" == *"Shanghai"* ]] || [ "$CN_MIRROR" == "1" ] || [ "$DEBUG" == "1" ]; then
+  IS_CN_ENV=true
+  info_kv "Region" "China Optimization Active"
+fi
+
+if [ "$IS_CN_ENV" = true ]; then
+  select_flathub_mirror
+else
+  log "Using Global Sources."
+fi
