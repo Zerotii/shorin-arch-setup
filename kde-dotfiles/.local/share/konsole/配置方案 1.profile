@@ -1,6 +1,6 @@
 [Appearance]
 ColorScheme=Catppuccin-Frappe
-Font=JetBrains Maple Mono,15,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+Font=JetBrains Maple Mono,13,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
 LineSpacing=0
 
 [General]

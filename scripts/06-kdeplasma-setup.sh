@@ -351,8 +351,10 @@ if [ -d "$DOTFILES_SOURCE" ]; then
         log "Merging .config..."
         if [ ! -d "$HOME_DIR/.config" ]; then mkdir -p "$HOME_DIR/.config"; fi
         
-        exe cp -rf "$DOTFILES_SOURCE/.config/"* "$HOME_DIR/.config/" 2>/dev/null || true
-        exe cp -rf "$DOTFILES_SOURCE/.config/." "$HOME_DIR/.config/" 2>/dev/null || true
+        # 复制除了 kglobalshortcutsrc 之外的所有文件，避免覆盖用户的快捷键配置
+        exe find "$DOTFILES_SOURCE/.config" -type f -not -name "kglobalshortcutsrc" -exec cp -f {} "$HOME_DIR/.config/" \; 2>/dev/null || true
+        # 复制目录结构
+        exe find "$DOTFILES_SOURCE/.config" -type d -exec mkdir -p "$HOME_DIR/.config/{}" \; 2>/dev/null || true
         
         log "Fixing permissions for .config..."
         exe chown -R "$TARGET_USER" "$HOME_DIR/.config"

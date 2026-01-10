@@ -370,7 +370,7 @@ fi
 # ==============================================================================
 section "Step 5/9" "Deploying Dotfiles"
 
-REPO_GITHUB="https://github.com/SHORiN-KiWATA/ShorinArchExperience-ArchlinuxGuide.git"
+REPO_GITHUB="https://github.com/Zerotii/ShorinArchExperience-ArchlinuxGuide.git"
 REPO_GITEE="https://gitee.com/shorinkiwata/ShorinArchExperience-ArchlinuxGuide.git"
 TEMP_DIR="/tmp/shorin-repo"
 rm -rf "$TEMP_DIR"
