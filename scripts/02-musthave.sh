@@ -13,7 +13,7 @@ log ">>> Starting Phase 2: Essential (Must-have) Software & Drivers"
 # ------------------------------------------------------------------------------
 # 1. Btrfs Extras & GRUB (Config was done in 00-btrfs-init)
 # ------------------------------------------------------------------------------
-section "Step 1/8" "Btrfs Extras & GRUB"
+section "Step 1/9" "Btrfs Extras & GRUB"
 
 ROOT_FSTYPE=$(findmnt -n -o FSTYPE /)
 
@@ -73,7 +73,7 @@ fi
 # ------------------------------------------------------------------------------
 # 2. Audio & Video
 # ------------------------------------------------------------------------------
-section "Step 2/8" "Audio & Video"
+section "Step 2/9" "Audio & Video"
 
 log "Installing firmware..."
 exe pacman -Syu --noconfirm --needed sof-firmware alsa-ucm-conf alsa-firmware
@@ -87,7 +87,7 @@ success "Audio setup complete."
 # ------------------------------------------------------------------------------
 # 3. Locale
 # ------------------------------------------------------------------------------
-section "Step 3/8" "Locale Configuration"
+section "Step 3/9" "Locale Configuration"
 
 if locale -a | grep -iq "zh_CN.utf8"; then
     success "Chinese locale (zh_CN.UTF-8) is active."
@@ -104,7 +104,7 @@ fi
 # ------------------------------------------------------------------------------
 # 4. Input Method
 # ------------------------------------------------------------------------------
-section "Step 4/8" "Input Method (Fcitx5)"
+section "Step 4/9" "Input Method (Fcitx5)"
 
 exe pacman -Syu --noconfirm --needed fcitx5-im fcitx5-rime
 
@@ -137,9 +137,18 @@ EOT
 success "Fcitx5 configured."
 
 # ------------------------------------------------------------------------------
-# 5. Bluetooth (Smart Detection)
+# 5. Network Tools
 # ------------------------------------------------------------------------------
-section "Step 5/8" "Bluetooth"
+section "Step 5/9" "Network Tools (Clash Verge Rev)"
+
+log "Installing clash-verge-rev from archlinuxcn repository..."
+exe pacman -Syu --noconfirm --needed clash-verge-rev
+success "clash-verge-rev installed successfully."
+
+# ------------------------------------------------------------------------------
+# 6. Bluetooth (Smart Detection)
+# ------------------------------------------------------------------------------
+section "Step 6/9" "Bluetooth"
 
 # Ensure detection tools are present
 log "Detecting Bluetooth hardware..."
@@ -173,26 +182,26 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 6. Power
+# 7. Power
 # ------------------------------------------------------------------------------
-section "Step 6/8" "Power Management"
+section "Step 7/9" "Power Management"
 
 exe pacman -Syu --noconfirm --needed power-profiles-daemon
 exe systemctl enable --now power-profiles-daemon
 success "Power profiles daemon enabled."
 
 # ------------------------------------------------------------------------------
-# 7. Fastfetch
+# 8. Fastfetch
 # ------------------------------------------------------------------------------
-section "Step 7/8" "Fastfetch"
+section "Step 8/9" "Fastfetch"
 
 exe pacman -Syu --noconfirm --needed fastfetch
 success "Fastfetch installed."
 
 # ------------------------------------------------------------------------------
-# 8. XDG Dirs
+# 9. XDG Dirs
 # ------------------------------------------------------------------------------
-section "Step 8/8" "User Directories"
+section "Step 9/9" "User Directories"
 
 exe pacman -Syu --noconfirm --needed xdg-user-dirs
 success "xdg-user-dirs installed."
