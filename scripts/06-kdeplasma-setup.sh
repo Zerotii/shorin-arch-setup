@@ -38,9 +38,13 @@ info_kv "Target" "$TARGET_USER"
 section "Step 1/5" "Plasma Core"
 
 log "Installing KDE Plasma Meta & Apps..."
-KDE_PKGS="plasma-meta konsole dolphin kate firefox qt6-multimedia-ffmpeg pipewire-jack sddm"
+KDE_PKGS="plasma-meta konsole dolphin kate qt6-multimedia-ffmpeg pipewire-jack sddm"
 exe pacman -Syu --noconfirm --needed $KDE_PKGS
 success "KDE Plasma installed."
+
+log "Installing Google Chrome using yay..."
+exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None google-chrome
+success "Google Chrome installed."
 
 # ------------------------------------------------------------------------------
 # 2. Software Store & Network (Smart Mirror Selection)
