@@ -111,6 +111,22 @@ exe pacman -Syu --noconfirm --needed fcitx5-im fcitx5-rime
 log "Installing rime-wanxiang-pro-flypy from archlinuxcn repository..."
 exe pacman -Syu --noconfirm --needed rime-wanxiang-pro-flypy
 
+log "Installing wanxiang-tools from GitHub repository..."
+# Download and install wanxiang-tools from GitHub release
+exe pacman -Syu --noconfirm --needed wget
+# Get the latest release URL for Arch Linux version
+RELEASE_URL=$(wget -qO- https://api.github.com/repos/amzxyz/RIME-LMDG/releases/latest | grep -o 'https://.*wanxiang-tools.*arch.*\.pkg\.tar\.zst')
+if [ -n "$RELEASE_URL" ]; then
+    log "Downloading wanxiang-tools from $RELEASE_URL..."
+    exe wget -O /tmp/wanxiang-tools.pkg.tar.zst "$RELEASE_URL"
+    log "Installing wanxiang-tools..."
+    exe pacman -U --noconfirm /tmp/wanxiang-tools.pkg.tar.zst
+    exe rm /tmp/wanxiang-tools.pkg.tar.zst
+    success "wanxiang-tools installed successfully."
+else
+    error "Failed to get wanxiang-tools release URL."
+fi
+
 log "Configuring Rime defaults..."
 TARGET_DIR="/etc/skel/.local/share/fcitx5/rime"
 exe mkdir -p "$TARGET_DIR"
