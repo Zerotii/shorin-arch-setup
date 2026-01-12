@@ -83,11 +83,102 @@ EOF
 #=================================================
 section "Step 4" "Configure Shortcuts"
 log "Configuring shortcuts.."
-GNOME_KEY_DIR="$PARENT_DIR/gnome-dotfiles/keybinds"
-chown -R $TARGET_USER $PARENT_DIR/gnome-dotfiles/keybinds
-cat "$GNOME_KEY_DIR/org.gnome.desktop.wm.keybindings.conf" | dconf load /org/gnome/desktop/wm/keybindings/
-cat "$GNOME_KEY_DIR/org.gnome.settings-daemon.plugins.media-keys.conf" | sudo -u $TARGET_USER dconf load /org/gnome/settings-daemon/plugins/media-keys/
-cat "$GNOME_KEY_DIR/org.gnome.shell.keybindings.conf" | sudo -u $TARGET_USER dconf load /org/gnome/shell/keybindings/
+
+sudo -u "$TARGET_USER" bash <<EOF
+    # 必须指定 DBUS 地址才能连接到用户会话
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus"
+
+    echo "   ➜ Applying shortcuts from config files for user: $(whoami)..."
+
+    # ---------------------------------------------------------
+    # 1. org.gnome.desktop.wm.keybindings (窗口管理)
+    # ---------------------------------------------------------
+    SCHEMA="org.gnome.desktop.wm.keybindings"
+    
+    # 基础窗口控制
+    gsettings set \$SCHEMA close "['<Super>q']"
+    gsettings set \$SCHEMA show-desktop "['<Super>h']"
+    gsettings set \$SCHEMA toggle-fullscreen "['<Alt><Super>f']"
+    gsettings set \$SCHEMA toggle-maximized "['<Super>f']"
+    
+    # 清理未使用的窗口控制键 
+    gsettings set \$SCHEMA maximize "[]"
+    gsettings set \$SCHEMA minimize "[]"
+    gsettings set \$SCHEMA unmaximize "[]"
+
+    # 切换与移动工作区 
+    gsettings set \$SCHEMA switch-to-workspace-left "['<Shift><Super>q']"
+    gsettings set \$SCHEMA switch-to-workspace-right "['<Shift><Super>e']"
+    gsettings set \$SCHEMA move-to-workspace-left "['<Control><Super>q']"
+    gsettings set \$SCHEMA move-to-workspace-right "['<Control><Super>e']"
+    
+    # 切换应用/窗口 
+    gsettings set \$SCHEMA switch-applications "['<Alt>Tab']"
+    gsettings set \$SCHEMA switch-applications-backward "['<Shift><Alt>Tab']"
+    gsettings set \$SCHEMA switch-group "['<Alt>grave']"
+    gsettings set \$SCHEMA switch-group-backward "['<Shift><Alt>grave']"
+    
+    # 清理输入法切换快捷键
+    gsettings set \$SCHEMA switch-input-source "[]"
+    gsettings set \$SCHEMA switch-input-source-backward "[]"
+
+    # ---------------------------------------------------------
+    # 2. org.gnome.shell.keybindings (Shell 全局)
+    # ---------------------------------------------------------
+    SCHEMA="org.gnome.shell.keybindings"
+    
+    # 截图相关
+    gsettings set \$SCHEMA screenshot "['<Shift><Control><Super>a']"
+    gsettings set \$SCHEMA screenshot-window "['<Control><Super>a']"
+    gsettings set \$SCHEMA show-screenshot-ui "['<Alt><Super>a']"
+    
+    # 界面视图
+    gsettings set \$SCHEMA toggle-application-view "['<Super>g']"
+    gsettings set \$SCHEMA toggle-quick-settings "['<Control><Super>s']"
+    gsettings set \$SCHEMA toggle-message-tray "[]"
+
+    # ---------------------------------------------------------
+    # 3. org.gnome.settings-daemon.plugins.media-keys (媒体与自定义)
+    # ---------------------------------------------------------
+    SCHEMA="org.gnome.settings-daemon.plugins.media-keys"
+
+    # 辅助功能
+    gsettings set \$SCHEMA magnifier "['<Alt><Super>0']"
+    gsettings set \$SCHEMA screenreader "[]"
+
+    # --- 自定义快捷键逻辑 ---
+    # 定义添加函数
+    add_custom() {
+        local index="\$1"
+        local name="\$2"
+        local cmd="\$3"
+        local bind="\$4"
+        
+        local path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom\$index/"
+        local key_schema="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:\$path"
+        
+        gsettings set "\$key_schema" name "\$name"
+        gsettings set "\$key_schema" command "\$cmd"
+        gsettings set "\$key_schema" binding "\$bind"
+        
+        echo "\$path"
+    }
+
+    # 构建自定义快捷键列表 (完全对应 custom0 - custom6)
+    
+    P0=\$(add_custom 0 "openbrowser" "firefox" "<Super>b")
+    P1=\$(add_custom 1 "openterminal" "ghostty" "<Super>t")
+    P2=\$(add_custom 2 "missioncenter" "missioncenter" "<Super>grave")
+    P3=\$(add_custom 3 "opennautilus" "nautilus" "<Super>e")
+    P4=\$(add_custom 4 "editscreenshot" "gradia --screenshot" "<Shift><Super>s")
+    P5=\$(add_custom 5 "gnome-control-center" "gnome-control-center" "<Control><Alt>s")
+
+    # 应用列表
+    CUSTOM_LIST="['\$P0', '\$P1', '\$P2', '\$P3', '\$P4', '\$P5', '\$P6']"
+    gsettings set \$SCHEMA custom-keybindings "\$CUSTOM_LIST"
+    
+    echo "   ➜ Shortcuts synced with config files successfully."
+EOF
 
 #=================================================
 # extensions
@@ -113,10 +204,11 @@ EXTENSION_LIST=(
     "tilingshell@ferrarodomenico.com"
     "user-theme@gnome-shell-extensions.gcampax.github.com"
     "kimpanel@kde.org"
+    "rounded-window-corners@fxgn"
 )
 log "Downloading extensions..."
-sudo -u $TARGET_USER gnome-extensions-cli install ${EXTENSION_LIST[@]}
-sudo -u $TARGET_USER gnome-extensions-cli enable ${EXTENSION_LIST[@]}
+sudo -u $TARGET_USER dbus-launch gnome-extensions-cli install ${EXTENSION_LIST[@]}
+sudo -u $TARGET_USER dbus-launch gnome-extensions-cli enable ${EXTENSION_LIST[@]}
 
 
 # === firefox inte ===
