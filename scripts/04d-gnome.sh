@@ -1,26 +1,36 @@
 #!/bin/bash
 
+# ==============================================================================
+# GNOME Setup Script (04d-gnome.sh)
+# ==============================================================================
+
 # 引用工具库
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# 检查 utils 脚本
 if [ -f "$SCRIPT_DIR/00-utils.sh" ]; then
     source "$SCRIPT_DIR/00-utils.sh"
 else
     echo "Error: 00-utils.sh not found."
     exit 1
 fi
-log "installing dms..."
+
+log "Initializing installation..."
 
 check_root
+
 # ==============================================================================
 #  Identify User 
 # ==============================================================================
-
 log "Identifying user..."
 DETECTED_USER=$(awk -F: '$3 == 1000 {print $1}' /etc/passwd)
 TARGET_USER="${DETECTED_USER:-$(read -p "Target user: " u && echo $u)}"
+TARGET_UID=$(id -u "$TARGET_USER") # 提前获取 UID，后续 DBUS 配置需要
 HOME_DIR="/home/$TARGET_USER"
-info_kv "Target" "$TARGET_USER"
+
+info_kv "Target User" "$TARGET_USER"
+info_kv "Home Dir"    "$HOME_DIR"
 
 # ==================================
 # temp sudo without passwd
@@ -40,12 +50,16 @@ cleanup_sudo() {
 trap cleanup_sudo EXIT INT TERM
 
 #=================================================
-# installation
+# Step 1: Install base pkgs
 #=================================================
 section "Step 1" "Install base pkgs"
-log "Installing GNOME ..."
-if exe as_user yay -S --noconfirm --needed --answerdiff=None --answerclean=None gnome-desktop gnome-backgrounds gnome-tweaks gdm ghostty gnome-control-center gnome-software flatpak file-roller nautilus-python firefox nm-connection-editor pacman-contrib dnsmasq ttf-jetbrains-maple-mono-nf-xx-xx; then
-        log "PKGS intsalled "
+log "Installing GNOME and base tools..."
+if exe as_user yay -S --noconfirm --needed --answerdiff=None --answerclean=None \
+    gnome-desktop gnome-backgrounds gnome-tweaks gdm ghostty \
+    gnome-control-center gnome-software flatpak file-roller \
+    nautilus-python firefox nm-connection-editor pacman-contrib \
+    dnsmasq ttf-jetbrains-maple-mono-nf-xx-xx; then
+        log "Packages installed successfully."
 else
         log "Installation failed."
         return 1
@@ -56,15 +70,16 @@ log "Enable gdm..."
 exe systemctl enable gdm
 
 #=================================================
-# set default terminal
+# Step 2: Set default terminal
 #=================================================
 section "Step 2" "Set default terminal"
-log "set gnome default terminal..."
+log "Setting GNOME default terminal to Ghostty..."
+# 注意：这里如果普通 as_user 失败，通常是因为 dbus 连接问题，但此处保留原样
 exe as_user gsettings set org.gnome.desktop.default-applications.terminal exec 'ghostty'
 exe as_user gsettings set org.gnome.desktop.default-applications.terminal exec-arg '-e'
 
 #=================================================
-# locale
+# Step 3: Set locale
 #=================================================
 section "Step 3" "Set locale"
 log "Configuring GNOME locale for user $TARGET_USER..."
@@ -79,16 +94,17 @@ Languages=zh_CN.UTF-8
 EOF
 
 #=================================================
-# shortcuts
+# Step 4: Configure Shortcuts
 #=================================================
 section "Step 4" "Configure Shortcuts"
-log "Configuring shortcuts.."
+log "Configuring shortcuts..."
 
+# 使用 sudo -u 切换用户并注入 DBUS 变量以修改 dconf
 sudo -u "$TARGET_USER" bash <<EOF
-    # 必须指定 DBUS 地址才能连接到用户会话
+    # 关键：手动指定 DBUS 地址
     export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus"
 
-    echo "   ➜ Applying shortcuts from config files for user: $(whoami)..."
+    echo "   ➜ Applying shortcuts for user: $(whoami)..."
 
     # ---------------------------------------------------------
     # 1. org.gnome.desktop.wm.keybindings (窗口管理)
@@ -164,7 +180,7 @@ sudo -u "$TARGET_USER" bash <<EOF
         echo "\$path"
     }
 
-    # 构建自定义快捷键列表 (完全对应 custom0 - custom6)
+    # 构建自定义快捷键列表
     
     P0=\$(add_custom 0 "openbrowser" "firefox" "<Super>b")
     P1=\$(add_custom 1 "openterminal" "ghostty" "<Super>t")
@@ -173,18 +189,18 @@ sudo -u "$TARGET_USER" bash <<EOF
     P4=\$(add_custom 4 "editscreenshot" "gradia --screenshot" "<Shift><Super>s")
     P5=\$(add_custom 5 "gnome-control-center" "gnome-control-center" "<Control><Alt>s")
 
-    # 应用列表
-    CUSTOM_LIST="['\$P0', '\$P1', '\$P2', '\$P3', '\$P4', '\$P5', '\$P6']"
+    # 应用列表 (已移除重复的 P6)
+    CUSTOM_LIST="['\$P0', '\$P1', '\$P2', '\$P3', '\$P4', '\$P5']"
     gsettings set \$SCHEMA custom-keybindings "\$CUSTOM_LIST"
     
     echo "   ➜ Shortcuts synced with config files successfully."
 EOF
 
 #=================================================
-# extensions
+# Step 5: Extensions
 #=================================================
 section "Step 5" "Install Extensions"
-log "Installing Extensions..."
+log "Installing Extensions CLI..."
 
 sudo -u $TARGET_USER yay -S --noconfirm --needed --answerdiff=None --answerclean=None gnome-extensions-cli
 
@@ -227,19 +243,14 @@ sudo -u "$TARGET_USER" bash <<EOF
             if [ "\$current_list" = "@as []" ]; then
                 gsettings set org.gnome.shell enabled-extensions "['\$uuid']"
             else
-                # 去掉右括号，加逗号和新 uuid，再补回右括号
-                # 注意：gsettings 的列表格式有点严格，这里做简单的字符串拼接
                 new_list="\${current_list%]}, '\$uuid']"
                 gsettings set org.gnome.shell enabled-extensions "\$new_list"
             fi
         fi
     }
 
-    echo "   ➜ Activating extensions..."
+    echo "   ➜ Activating extensions via gsettings..."
 
-    # 在这里列出你所有需要激活的扩展 UUID
-    # (这些 UUID 通常也是你安装扩展时用的名字)
-    
     enable_extension "user-theme@gnome-shell-extensions.gcampax.github.com"
     enable_extension "arch-update@RaphaelRochet"
     enable_extension "aztaskbar@aztaskbar.gitlab.com"
@@ -260,19 +271,26 @@ sudo -u "$TARGET_USER" bash <<EOF
     echo "   ➜ Extensions activation request sent."
 EOF
 
-chown -R $TARGET_USER $HOME_DIR/.local/share/gnome-shell/extensions
+# 编译扩展 Schema (防止报错)
+log "Compiling extension schemas..."
+# 先确保所有权正确
+chown -R $TARGET_USER:$TARGET_USER $HOME_DIR/.local/share/gnome-shell/extensions
+
 sudo -u "$TARGET_USER" bash <<EOF
     EXT_DIR="$HOME_DIR/.local/share/gnome-shell/extensions"
     
+    echo "   ➜ Compiling schemas in \$EXT_DIR..."
     for dir in "\$EXT_DIR"/*; do
         if [ -d "\$dir/schemas" ]; then
             glib-compile-schemas "\$dir/schemas"
         fi
     done
 EOF
-# === firefox inte ===
-log "Configuring Firefox GNOME Integration..."
 
+#=================================================
+# Firefox Policies
+#=================================================
+section "Firefox" "Configuring Firefox GNOME Integration"
 exe sudo -u $TARGET_USER yay -S --noconfirm --needed --answerdiff=None --answerclean=None gnome-browser-connector
 
 # 配置 Firefox 策略自动安装扩展
@@ -290,17 +308,15 @@ echo '{
 }' > "$POL_DIR/policies.json"
 
 exe chmod 755 "$POL_DIR" && exe chmod 644 "$POL_DIR/policies.json"
-
 log "Firefox policies updated."
 
 #=================================================
-# Input Method
+# Step 6: Input Method
 #=================================================
 section "Step 6" "Input method"
-log "Configure input method."
+log "Configure input method environment..."
 
-if ! cat "/etc/environment" | grep -q "fcitx" ; then
-
+if ! grep -q "fcitx" "/etc/environment" 2>/dev/null; then
     cat << EOT >> /etc/environment
 XIM="fcitx"
 GTK_IM_MODULE=fcitx
@@ -308,18 +324,35 @@ QT_IM_MODULE=fcitx
 XMODIFIERS=@im=fcitx
 XDG_CURRENT_DESKTOP=GNOME
 EOT
-
+    log "Fcitx environment variables added."
+else
+    log "Fcitx environment variables already exist."
 fi
 
 #=================================================
-# dotfiles
+# Dotfiles
 #=================================================
-log "Deploying dotfiles..."
+section "Dotfiles" "Deploying dotfiles"
 GNOME_DOTFILES_DIR=$PARENT_DIR/gnome-dotfiles
-as_user mkdir -p $HOME_DIR/.config
-cp -rf $GNOME_DOTFILES_DIR/. $HOME_DIR
-chown -R $TARGET_USER $HOME_DIR
-pacman -S --noconfirm --needed thefuck starship eza fish zoxide
 
-log "Dotfiles deployed and shell tools installed."
+# 1. 确保目标目录存在
+log "Ensuring .config exists..."
+sudo -u $TARGET_USER mkdir -p $HOME_DIR/.config
 
+# 2. 复制文件 (包含隐藏文件)
+# 使用 /. 语法将源文件夹的*内容*合并到目标文件夹
+log "Copying dotfiles..."
+cp -rf "$GNOME_DOTFILES_DIR/." "$HOME_DIR/"
+
+# 3. 修复权限 (因为 cp 是 root 运行的)
+# 明确修复 home 目录下的关键配置文件夹，避免权限问题
+log "Fixing permissions..."
+chown -R $TARGET_USER:$TARGET_USER $HOME_DIR/.config
+chown -R $TARGET_USER:$TARGET_USER $HOME_DIR/.local
+
+# 4. 安装 Shell 工具
+log "Installing shell tools..."
+pacman -S --noconfirm --needed thefuck starship eza fish zoxide jq
+
+log "Installation Complete! Please reboot."
+cleanup_sudo
