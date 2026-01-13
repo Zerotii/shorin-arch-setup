@@ -55,7 +55,7 @@ else
     exe sed -i "/\[multilib\]/,/Include/"'s/^#//' /etc/pacman.conf
     
     log "Refreshing database..."
-    exe pacman -Syu
+    exe pacman -Syyu
     success "[multilib] enabled."
 fi
 
