@@ -182,9 +182,43 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 7. Power
+# 7. Fingerprint Reader (Smart Detection)
 # ------------------------------------------------------------------------------
-section "Step 7/9" "Power Management"
+section "Step 7/9" "Fingerprint Reader"
+
+log "Detecting fingerprint hardware..."
+FINGERPRINT_FOUND=false
+
+# 1. Check USB for fingerprint devices
+if lsusb | grep -qi -E "(fingerprint|authentec|validity|synaptics|elan)"; then FINGERPRINT_FOUND=true; fi
+# 2. Check PCI for fingerprint devices
+if lspci | grep -qi -E "(fingerprint|authentec|validity|synaptics|elan)"; then FINGERPRINT_FOUND=true; fi
+# 3. Check if fprintd can detect any devices
+if command -v fprintd-list >/dev/null 2>&1; then
+    if fprintd-list | grep -qi "device"; then FINGERPRINT_FOUND=true; fi
+fi
+
+if [ "$FINGERPRINT_FOUND" = true ]; then
+    info_kv "Hardware" "Detected"
+    
+    log "Installing fingerprint reader software..."
+    # Install fprintd from official repository
+    exe pacman -Syu --noconfirm --needed fprintd
+    # Install libfprint-git from AUR using yay
+    exe runuser -u "$(awk -F: '$3 == 1000 {print $1}' /etc/passwd)" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None libfprint-git
+    
+    log "Enabling fingerprint service..."
+    exe systemctl enable --now fprintd
+    success "Fingerprint reader configured and enabled."
+else
+    info_kv "Hardware" "Not Found"
+    warn "No fingerprint device detected. Skipping installation."
+fi
+
+# ------------------------------------------------------------------------------
+# 8. Power
+# ------------------------------------------------------------------------------
+section "Step 8/9" "Power Management"
 
 exe pacman -Syu --noconfirm --needed power-profiles-daemon
 exe systemctl enable --now power-profiles-daemon
