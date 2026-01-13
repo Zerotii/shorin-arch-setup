@@ -201,11 +201,18 @@ fi
 if [ "$FINGERPRINT_FOUND" = true ]; then
     info_kv "Hardware" "Detected"
     
+    # Get target user (same as in other scripts)
+    TARGET_USER=$(awk -F: '$3 == 1000 {print $1}' /etc/passwd)
+    
     log "Installing fingerprint reader software..."
     # Install fprintd from official repository
     exe pacman -Syu --noconfirm --needed fprintd
     # Install libfprint-git from AUR using yay
-    exe runuser -u "$(awk -F: '$3 == 1000 {print $1}' /etc/passwd)" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None libfprint-git
+    if [ -n "$TARGET_USER" ]; then
+        exe runuser -u "$TARGET_USER" -- yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None libfprint-git
+    else
+        warn "Target user not found. Skipping libfprint-git installation."
+    fi
     
     log "Enabling fingerprint service..."
     exe systemctl enable --now fprintd
