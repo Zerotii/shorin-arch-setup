@@ -102,5 +102,10 @@ log "Installing yay and paru..."
 exe pacman -Syu --noconfirm --needed base-devel yay paru
 success "Helpers installed."
 
+# Configure yay to use Tsinghua AUR mirror for faster downloads
+log "Configuring yay to use Tsinghua AUR mirror..."
+yay --aururl "https://aur.tuna.tsinghua.edu.cn" --save
+success "Yay mirror configured to use Tsinghua AUR."
+
 log "Module 01 completed."
 
