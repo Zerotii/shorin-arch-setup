@@ -218,8 +218,8 @@ fi
 # ==============================================================================
 section "Step 3/9" "Network Optimization"
 exe pacman -S --noconfirm --needed flatpak gnome-software
-exe flatpak remote-add --if-not-exists flathub https://mirrors.ustc.edu.cn/flathub/flathub.flatpakrepo
-success "Flatpak configured with USTC mirror."
+exe flatpak remote-add --if-not-exists flathub https://mirror.sjtu.edu.cn/flathub/flathub.flatpakrepo
+success "Flatpak configured with SJTU mirror."
 
 CURRENT_TZ=$(readlink -f /etc/localtime)
 IS_CN_ENV=false

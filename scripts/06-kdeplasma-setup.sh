@@ -54,8 +54,8 @@ section "Step 2/5" "Software Store & Network"
 log "Configuring Discover & Flatpak..."
 
 exe pacman -Syu --noconfirm --needed flatpak flatpak-kcm
-exe flatpak remote-add --if-not-exists flathub https://mirrors.ustc.edu.cn/flathub/flathub.flatpakrepo
-success "Flatpak configured with USTC mirror."
+exe flatpak remote-add --if-not-exists flathub https://mirror.sjtu.edu.cn/flathub/flathub.flatpakrepo
+success "Flatpak configured with SJTU mirror."
 
 # --- Network Detection Logic ---
 CURRENT_TZ=$(readlink -f /etc/localtime)
