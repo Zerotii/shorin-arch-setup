@@ -152,7 +152,6 @@ if [ -f "$LIST_FILE" ]; then
         echo ""
         echo -e "   Selected List: ${BOLD}$LIST_FILE${NC}"
         echo -e "   ${H_YELLOW}>>> Default installation will start in 60 seconds.${NC}"
-        echo -e "   ${H_RED}${BOLD}>>> WARNING: AUR packages may fail due to unstable network connection!${NC}"
         echo -e "   ${H_CYAN}>>> Press ANY KEY to customize selection...${NC}"
 
         if read -t 60 -n 1 -s -r; then
