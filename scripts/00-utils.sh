@@ -35,7 +35,9 @@ export ARROW="${H_CYAN}➜${NC}"
 
 # 日志文件
 export TEMP_LOG_FILE="/tmp/log-shorin-arch-setup.txt"
-[ ! -f "$TEMP_LOG_FILE" ] && touch "$TEMP_LOG_FILE" && chmod 666 "$TEMP_LOG_FILE"
+# 确保文件存在并设置正确权限
+touch "$TEMP_LOG_FILE"
+chmod 666 "$TEMP_LOG_FILE"
 
 # --- 2. 基础工具 ---
 
