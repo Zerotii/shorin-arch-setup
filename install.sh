@@ -88,10 +88,10 @@ select_desktop() {
     # 1. 定义选项 (显示名称|内部ID)
     local OPTIONS=(
         "No Desktop |none"
-        "Shorin's Niri |niri"
-        "Shorin's KDE Plasma |kde"
-        "Shorin's GNOME |gnome"
-        "Quickshell--DMS (both hyprland and niri) |dms"
+        "Niri |niri"
+        "KDE Plasma |kde"
+        "GNOME |gnome"
+        "Quickshell--DMS  |dms"
     )
     
     # 2. 绘制菜单 (半开放式风格)
