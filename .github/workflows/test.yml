@@ -58,7 +58,20 @@ jobs:
           
           # Run the test script
           bash scripts/test-apps.sh
+          
+          # Copy test reports to host
+          cp -r test-reports /tmp/
         '
+        
+    - name: Copy test reports from container
+      run: |
+        docker cp arch-test:/tmp/test-reports .
+        
+    - name: Upload test reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports
+        path: test-reports/
         
     - name: Clean up
       run: docker stop arch-test && docker rm arch-test
