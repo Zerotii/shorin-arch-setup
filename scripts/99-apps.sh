@@ -53,6 +53,7 @@ REPO_APPS=()
 AUR_APPS=()
 FLATPAK_APPS=()
 FAILED_PACKAGES=()
+SUCCESSFUL_PACKAGES=()
 
 if [ ! -f "$LIST_FILE" ]; then
     warn "File $LIST_FILENAME not found. Skipping."
@@ -187,10 +188,13 @@ if [ ${#REPO_APPS[@]} -gt 0 ]; then
         if ! exe as_user yay -Syu --noconfirm --needed --answerdiff=None --answerclean=None $BATCH_LIST; then
             error "Batch installation failed. Some repo packages might be missing."
             for pkg in "${REPO_QUEUE[@]}"; do
-                FAILED_PACKAGES+=("repo:$pkg")
+                FAILED_PACKAGES+=("repo:$pkg:安装失败")
             done
         else
             success "Repo batch installation completed."
+            for pkg in "${REPO_QUEUE[@]}"; do
+                SUCCESSFUL_PACKAGES+=("repo:$pkg:安装成功")
+            done
         fi
     else
         log "All Repo packages are already installed."
@@ -221,6 +225,7 @@ if [ ${#AUR_APPS[@]} -gt 0 ]; then
             if as_user yay -S --noconfirm --needed --answerdiff=None --answerclean=None "$app"; then
                 install_success=true
                 success "Installed $app"
+                SUCCESSFUL_PACKAGES+=("aur:$app:安装成功")
                 break
             else
                 warn "Attempt $((i+1)) failed for $app"
@@ -229,7 +234,7 @@ if [ ${#AUR_APPS[@]} -gt 0 ]; then
 
         if [ "$install_success" = false ]; then
             error "Failed to install $app after $((max_retries+1)) attempts."
-            FAILED_PACKAGES+=("aur:$app")
+            FAILED_PACKAGES+=("aur:$app:安装失败，已尝试$((max_retries+1))次")
         fi
     done
 fi
@@ -247,9 +252,10 @@ if [ ${#FLATPAK_APPS[@]} -gt 0 ]; then
         log "Installing Flatpak: $app ..."
         if ! exe flatpak install -y flathub "$app"; then
             error "Failed to install: $app"
-            FAILED_PACKAGES+=("flatpak:$app")
+            FAILED_PACKAGES+=("flatpak:$app:安装失败")
         else
             success "Installed $app"
+            SUCCESSFUL_PACKAGES+=("flatpak:$app:安装成功")
         fi
     done
 fi
@@ -387,27 +393,64 @@ if [ -f "$SUDO_TEMP_FILE" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Generate Failure Report
+# 5. Generate Detailed Installation Report
 # ------------------------------------------------------------------------------
-if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
-    DOCS_DIR="$HOME_DIR/Documents"
-    REPORT_FILE="$DOCS_DIR/安装失败的软件.txt"
-    
-    if [ ! -d "$DOCS_DIR" ]; then as_user mkdir -p "$DOCS_DIR"; fi
-    
-    echo -e "\n========================================================" >> "$REPORT_FILE"
-    echo -e " Installation Failure Report - $(date)" >> "$REPORT_FILE"
-    echo -e "========================================================" >> "$REPORT_FILE"
-    printf "%s\n" "${FAILED_PACKAGES[@]}" >> "$REPORT_FILE"
-    
-    chown "$TARGET_USER:$TARGET_USER" "$REPORT_FILE"
-    
-    echo ""
-    warn "Some applications failed to install."
-    warn "A report has been saved to:"
-    echo -e "   ${BOLD}$REPORT_FILE${NC}"
+DOCS_DIR="$HOME_DIR/Documents"
+REPORT_FILE="$DOCS_DIR/软件安装报告.txt"
+
+if [ ! -d "$DOCS_DIR" ]; then as_user mkdir -p "$DOCS_DIR"; fi
+
+echo -e "\n========================================================" > "$REPORT_FILE"
+echo -e " 软件安装详细报告 - $(date)" >> "$REPORT_FILE"
+echo -e "========================================================" >> "$REPORT_FILE"
+
+# 生成成功安装的软件列表
+if [ ${#SUCCESSFUL_PACKAGES[@]} -gt 0 ]; then
+    echo -e "\n✅ 成功安装的软件：" >> "$REPORT_FILE"
+    echo -e "--------------------------------------------------------" >> "$REPORT_FILE"
+    for pkg in "${SUCCESSFUL_PACKAGES[@]}"; do
+        echo -e "   $pkg" >> "$REPORT_FILE"
+    done
 else
-    success "All scheduled applications processed successfully."
+    echo -e "\n✅ 成功安装的软件：无" >> "$REPORT_FILE"
+fi
+
+# 生成安装失败的软件列表
+if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
+    echo -e "\n❌ 安装失败的软件：" >> "$REPORT_FILE"
+    echo -e "--------------------------------------------------------" >> "$REPORT_FILE"
+    for pkg in "${FAILED_PACKAGES[@]}"; do
+        echo -e "   $pkg" >> "$REPORT_FILE"
+    done
+else
+    echo -e "\n❌ 安装失败的软件：无" >> "$REPORT_FILE"
+fi
+
+# 生成统计信息
+TOTAL_PACKAGES=$(( ${#SUCCESSFUL_PACKAGES[@]} + ${#FAILED_PACKAGES[@]} ))
+SUCCESS_RATE=0
+if [ $TOTAL_PACKAGES -gt 0 ]; then
+    SUCCESS_RATE=$(( ${#SUCCESSFUL_PACKAGES[@]} * 100 / TOTAL_PACKAGES ))
+fi
+
+echo -e "\n📊 统计信息：" >> "$REPORT_FILE"
+echo -e "--------------------------------------------------------" >> "$REPORT_FILE"
+echo -e "   总软件数：$TOTAL_PACKAGES" >> "$REPORT_FILE"
+echo -e "   成功安装：${#SUCCESSFUL_PACKAGES[@]}" >> "$REPORT_FILE"
+echo -e "   安装失败：${#FAILED_PACKAGES[@]}" >> "$REPORT_FILE"
+echo -e "   成功率：$SUCCESS_RATE%" >> "$REPORT_FILE"
+echo -e "========================================================" >> "$REPORT_FILE"
+
+chown "$TARGET_USER:$TARGET_USER" "$REPORT_FILE"
+
+echo ""
+info "详细安装报告已生成："
+echo -e "   ${BOLD}$REPORT_FILE${NC}"
+
+if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
+    warn "部分应用安装失败，请查看报告了解详情。"
+else
+    success "所有应用安装成功！"
 fi
 
 # Reset Trap
