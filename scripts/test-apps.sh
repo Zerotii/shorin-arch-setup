@@ -45,10 +45,10 @@ test_repo_packages() {
         log "Checking $app..."
         if pacman -Si "$app" >/dev/null 2>&1; then
             success "$app: Found in official repository"
-            test_results+=("repo:$app:测试通过:在官方仓库中找到")
+            test_results+=("repo:$app:测试通过:在官方仓库中找到:pacman -Si $app")
         else
             error "$app: Not found in official repository"
-            test_results+=("repo:$app:测试失败:在官方仓库中未找到")
+            test_results+=("repo:$app:测试失败:在官方仓库中未找到:pacman -Si $app")
         fi
     done
 }
@@ -57,15 +57,22 @@ test_repo_packages() {
 test_aur_packages() {
     log "Testing AUR packages..."
     local aur_apps=("$@")
+    local url=""
+    local status=""
     
     for app in "${aur_apps[@]}"; do
-        log "Checking $app..."
-        if curl -sf "https://aur.archlinux.org/packages/$app" >/dev/null 2>&1; then
-            success "$app: Found in AUR"
-            test_results+=("aur:$app:测试通过:在AUR中找到")
+        url="https://aur.archlinux.org/packages/$app"
+        log "Checking $app at $url..."
+        
+        # Get HTTP status code
+        status=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+        
+        if [ "$status" -eq 200 ]; then
+            success "$app: Found in AUR (HTTP $status)"
+            test_results+=("aur:$app:测试通过:在AUR中找到 (HTTP $status):$url")
         else
-            error "$app: Not found in AUR"
-            test_results+=("aur:$app:测试失败:在AUR中未找到")
+            error "$app: Not found in AUR (HTTP $status)"
+            test_results+=("aur:$app:测试失败:在AUR中未找到 (HTTP $status):$url")
         fi
     done
 }
@@ -74,15 +81,22 @@ test_aur_packages() {
 test_flatpak_packages() {
     log "Testing Flatpak packages..."
     local flatpak_apps=("$@")
+    local url=""
+    local status=""
     
     for app in "${flatpak_apps[@]}"; do
-        log "Checking $app..."
-        if curl -sf "https://flathub.org/api/v1/apps/$app" >/dev/null 2>&1; then
-            success "$app: Found in Flathub"
-            test_results+=("flatpak:$app:测试通过:在Flathub中找到")
+        url="https://flathub.org/api/v1/apps/$app"
+        log "Checking $app at $url..."
+        
+        # Get HTTP status code
+        status=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+        
+        if [ "$status" -eq 200 ]; then
+            success "$app: Found in Flathub (HTTP $status)"
+            test_results+=("flatpak:$app:测试通过:在Flathub中找到 (HTTP $status):$url")
         else
-            error "$app: Not found in Flathub"
-            test_results+=("flatpak:$app:测试失败:在Flathub中未找到")
+            error "$app: Not found in Flathub (HTTP $status)"
+            test_results+=("flatpak:$app:测试失败:在Flathub中未找到 (HTTP $status):$url")
         fi
     done
 }
@@ -155,22 +169,72 @@ main() {
     # 统计测试结果
     local passed=0
     local failed=0
+    local passed_results=()
+    local failed_results=()
     
     for result in "${test_results[@]}"; do
         if [[ "$result" == *":测试通过:"* ]]; then
             ((passed++))
+            passed_results+=("$result")
         else
             ((failed++))
+            failed_results+=("$result")
         fi
     done
     
-    # 生成测试结果列表
-    echo -e "\n📋 测试结果详情：" >> "$REPORT_FILE"
+    # 生成通过测试的软件列表
+    echo -e "\n✅ 测试通过的软件：" >> "$REPORT_FILE"
     echo -e "--------------------------------------------------------" >> "$REPORT_FILE"
     
-    for result in "${test_results[@]}"; do
-        echo -e "   $result" >> "$REPORT_FILE"
-    done
+    if [ ${#passed_results[@]} -gt 0 ]; then
+        for result in "${passed_results[@]}"; do
+            # 提取类型（前两个字符）
+            type=$(echo "$result" | cut -d':' -f1)
+            # 提取应用名称（第二个字段）
+            app=$(echo "$result" | cut -d':' -f2)
+            # 提取状态（第三个字段）
+            status=$(echo "$result" | cut -d':' -f3)
+            # 提取原因（从第四个字段到倒数第二个字段）
+            reason=$(echo "$result" | cut -d':' -f4- | sed 's/:https\?:\/\///' | cut -d'/' -f1)
+            # 提取URL（从https://开始到结尾）
+            url=$(echo "$result" | grep -o 'https\?://.*')
+            echo -e "   $app" >> "$REPORT_FILE"
+            echo -e "     类型: $type" >> "$REPORT_FILE"
+            echo -e "     状态: $status" >> "$REPORT_FILE"
+            echo -e "     原因: $reason" >> "$REPORT_FILE"
+            echo -e "     地址: $url" >> "$REPORT_FILE"
+            echo -e "" >> "$REPORT_FILE"
+        done
+    else
+        echo -e "   无" >> "$REPORT_FILE"
+    fi
+    
+    # 生成失败测试的软件列表
+    echo -e "\n❌ 测试失败的软件：" >> "$REPORT_FILE"
+    echo -e "--------------------------------------------------------" >> "$REPORT_FILE"
+    
+    if [ ${#failed_results[@]} -gt 0 ]; then
+        for result in "${failed_results[@]}"; do
+            # 提取类型（前两个字符）
+            type=$(echo "$result" | cut -d':' -f1)
+            # 提取应用名称（第二个字段）
+            app=$(echo "$result" | cut -d':' -f2)
+            # 提取状态（第三个字段）
+            status=$(echo "$result" | cut -d':' -f3)
+            # 提取原因（从第四个字段到倒数第二个字段）
+            reason=$(echo "$result" | cut -d':' -f4- | sed 's/:https\?:\/\///' | cut -d'/' -f1)
+            # 提取URL（从https://开始到结尾）
+            url=$(echo "$result" | grep -o 'https\?://.*')
+            echo -e "   $app" >> "$REPORT_FILE"
+            echo -e "     类型: $type" >> "$REPORT_FILE"
+            echo -e "     状态: $status" >> "$REPORT_FILE"
+            echo -e "     原因: $reason" >> "$REPORT_FILE"
+            echo -e "     地址: $url" >> "$REPORT_FILE"
+            echo -e "" >> "$REPORT_FILE"
+        done
+    else
+        echo -e "   无" >> "$REPORT_FILE"
+    fi
     
     # 生成统计信息
     local total=$((passed + failed))
