@@ -1,0 +1,64 @@
+name: Test Shorin Arch Setup Script
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  test-script:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Arch Linux container
+      run: |
+        docker run --name arch-test -d archlinux:latest sleep infinity
+        docker exec arch-test pacman -Syu --noconfirm
+        docker exec arch-test pacman -S --noconfirm bash git
+        
+    - name: Copy script to container
+      run: |
+        docker cp . arch-test:/shorin-arch-setup
+        
+    - name: Test script syntax
+      run: |
+        docker exec arch-test bash -n /shorin-arch-setup/install.sh
+        docker exec arch-test find /shorin-arch-setup/scripts -name "*.sh" -exec bash -n {} \;
+        
+    - name: Test script structure
+      run: |
+        docker exec arch-test ls -la /shorin-arch-setup/
+        docker exec arch-test ls -la /shorin-arch-setup/scripts/
+        docker exec arch-test ls -la /shorin-arch-setup/grub-themes/
+        
+    - name: Test dependency checks
+      run: |
+        docker exec arch-test bash -c '
+          cd /shorin-arch-setup
+          # Check if all required files exist
+          [ -f install.sh ] && echo "✓ install.sh exists" || echo "✗ install.sh missing"
+          [ -d scripts ] && echo "✓ scripts directory exists" || echo "✗ scripts directory missing"
+          [ -d grub-themes ] && echo "✓ grub-themes directory exists" || echo "✗ grub-themes directory missing"
+          [ -f grub-themes/Atomic/theme.txt ] && echo "✓ Atomic theme exists" || echo "✗ Atomic theme missing"
+          [ -f grub-themes/Sleek/theme.txt ] && echo "✓ Sleek theme exists" || echo "✗ Sleek theme missing"
+        '
+        
+    - name: Test application download links
+      run: |
+        docker exec arch-test bash -c '
+          cd /shorin-arch-setup
+          # Make test script executable
+          chmod +x scripts/test-apps.sh
+          
+          # Install curl for testing
+          pacman -S --noconfirm curl >/dev/null 2>&1
+          
+          # Run the test script
+          bash scripts/test-apps.sh
+        '
+        
+    - name: Clean up
+      run: docker stop arch-test && docker rm arch-test
