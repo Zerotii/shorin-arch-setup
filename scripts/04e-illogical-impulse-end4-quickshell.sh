@@ -132,7 +132,11 @@ log "Applying permission fixes for user: $TARGET_USER..."
 chown -R "$TARGET_USER" "$HOME_DIR/.config"
 
 success "End4 input method and environment configured."
-
+# ==============================================================================
+#  screenshare
+# ==============================================================================
+section "end4" "Screenshare"
+pacman -S --noconfirm --needed xdg-desktop-portal-hyprland
 # ==============================================================================
 #  autologin
 # ==============================================================================
