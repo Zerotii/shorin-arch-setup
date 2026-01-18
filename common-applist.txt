@@ -1,4 +1,4 @@
-firefox                                  # the best browser on linux
+
 neovim                                   # Advanced version of vim 
 lazyvim                                  # Great preset of neovim 
 wine                                     # run windows exe 
@@ -45,7 +45,8 @@ localsend                                # send files to other devices
 # --- AUR Packages (Social) ---
 AUR:linuxqq-appimage                     # Tencent QQ (AppImage)
 AUR:wechat-appimage                      # WeChat (AppImage)
-AUR:typora-free                          # markdown editor
+AUR:google-chrome                        # chrome browser
+AUR:obsidian-appimage                    # markdown editor
 AUR:lsfg-vk-bin                          # yellow duck frame generator
 AUR:mangojuice-bin                       # GUI for mangohud                
 

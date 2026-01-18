@@ -64,7 +64,7 @@ CORE_PKGS=(
         "niri" 
         "xdg-desktop-portal-gnome" 
         "kitty" 
-        "firefox"
+
         "noctalia-shell"
         "qt6-multimedia-ffmpeg"
         "polkit-gnome"

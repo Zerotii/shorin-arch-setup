@@ -447,17 +447,7 @@ hide_desktop_file "/usr/share/applications/nvtop.desktop"
 hide_desktop_file "/usr/share/applications/mpv.desktop"
 hide_desktop_file "/usr/share/applications/org.gnome.Settings.desktop"
 
-# --- Post-Dotfiles Configuration: Firefox ---
-section "Config" "Firefox UI Customization"
 
-if [ -d "$HOME_DIR/.mozilla" ]; then 
-    log "Backing up existing .mozilla directory..."
-    mv "$HOME_DIR/.mozilla" "$HOME_DIR/.mozilla.bak.$(date +%s)"
-fi
-    
-mkdir -p "$HOME_DIR/.mozilla"
-cp -rf "$PARENT_DIR/resources/firefox" "$HOME_DIR/.mozilla/"
-chown -R "$TARGET_USER:$TARGET_USER" "$HOME_DIR/.mozilla"
 
 # ------------------------------------------------------------------------------
 # [FIX] CLEANUP GLOBAL SUDO CONFIGURATION

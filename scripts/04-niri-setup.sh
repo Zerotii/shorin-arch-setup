@@ -155,14 +155,10 @@ fi
 # STEP 2: Core Components
 # ==============================================================================
 section "Step 1/9" "Core Components"
-PKGS="niri xdg-desktop-portal-gnome fuzzel kitty firefox libnotify mako polkit-gnome"
+PKGS="niri xdg-desktop-portal-gnome fuzzel kitty libnotify mako polkit-gnome"
 exe pacman -S --noconfirm --needed $PKGS
 
-log "Configuring Firefox Policies..."
-POL_DIR="/etc/firefox/policies"
-exe mkdir -p "$POL_DIR"
-echo '{ "policies": { "Extensions": { "Install": ["https://addons.mozilla.org/firefox/downloads/latest/pywalfox/latest.xpi"] } } }' >"$POL_DIR/policies.json"
-exe chmod 755 "$POL_DIR" && exe chmod 644 "$POL_DIR/policies.json"
+
 
 # ==============================================================================
 # STEP 3: File Manager

@@ -38,7 +38,7 @@ info_kv "Target" "$TARGET_USER"
 section "Step 1/5" "Plasma Core"
 
 log "Installing KDE Plasma Meta & Apps..."
-KDE_PKGS="plasma-meta konsole dolphin kate firefox qt6-multimedia-ffmpeg pipewire-jack sddm"
+KDE_PKGS="plasma-meta konsole dolphin kate qt6-multimedia-ffmpeg pipewire-jack sddm"
 exe pacman -S --noconfirm --needed $KDE_PKGS
 success "KDE Plasma installed."
 

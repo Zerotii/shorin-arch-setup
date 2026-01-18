@@ -57,7 +57,7 @@ log "Installing GNOME and base tools..."
 if exe as_user yay -S --noconfirm --needed --answerdiff=None --answerclean=None \
     gnome-desktop gnome-backgrounds gnome-tweaks gdm ghostty celluloid loupe \
     gnome-control-center gnome-software flatpak file-roller \
-    nautilus-python firefox nm-connection-editor pacman-contrib \
+    nautilus-python nm-connection-editor pacman-contrib \
     dnsmasq ttf-jetbrains-maple-mono-nf-xx-xx; then
 
         exe pacman -S --noconfirm --needed ffmpegthumbnailer gvfs-smb nautilus-open-any-terminal file-roller gnome-keyring gst-plugins-base gst-plugins-good gst-libav nautilus 
@@ -186,7 +186,6 @@ sudo -u "$TARGET_USER" bash <<EOF
 
     # 构建自定义快捷键列表
     
-    P0=\$(add_custom 0 "openbrowser" "firefox" "<Super>b")
     P1=\$(add_custom 1 "openterminal" "ghostty" "<Super>t")
     P2=\$(add_custom 2 "missioncenter" "missioncenter" "<Super>grave")
     P3=\$(add_custom 3 "opennautilus" "nautilus" "<Super>e")
@@ -194,7 +193,7 @@ sudo -u "$TARGET_USER" bash <<EOF
     P5=\$(add_custom 5 "gnome-control-center" "gnome-control-center" "<Control><Alt>s")
 
     # 应用列表 (已移除重复的 P6)
-    CUSTOM_LIST="['\$P0', '\$P1', '\$P2', '\$P3', '\$P4', '\$P5']"
+    CUSTOM_LIST="['\$P1', '\$P2', '\$P3', '\$P4', '\$P5']"
     gsettings set \$SCHEMA custom-keybindings "\$CUSTOM_LIST"
     
     echo "   ➜ Shortcuts synced with config files successfully."
@@ -297,22 +296,7 @@ EOF
 section "Firefox" "Configuring Firefox GNOME Integration"
 exe sudo -u $TARGET_USER yay -S --noconfirm --needed --answerdiff=None --answerclean=None gnome-browser-connector
 
-# 配置 Firefox 策略自动安装扩展
-POL_DIR="/etc/firefox/policies"
-exe mkdir -p "$POL_DIR"
 
-echo '{
-  "policies": {
-    "Extensions": {
-      "Install": [
-        "https://addons.mozilla.org/firefox/downloads/latest/gnome-shell-integration/latest.xpi"
-      ]
-    }
-  }
-}' > "$POL_DIR/policies.json"
-
-exe chmod 755 "$POL_DIR" && exe chmod 644 "$POL_DIR/policies.json"
-log "Firefox policies updated."
 #=================================================
 # nautilus fix
 #=================================================
